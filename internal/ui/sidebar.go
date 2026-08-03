@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/tmux"
 )
 
@@ -31,8 +32,11 @@ func (m *Model) sidebarLines(w, h int) []string {
 		blank()
 	}
 
-	// Reserve the last two rows for the legend.
-	listHeight := h - len(lines) - 2
+	// Reserve the last two rows for the legend, plus whatever the usage block
+	// needs above it. Both are dropped first when the window is too short.
+	usage := m.usageBlock(w, h-len(lines)-2)
+	reserved := 2 + len(usage)
+	listHeight := h - len(lines) - reserved
 	visible := m.visibleSessions()
 
 	switch {
@@ -45,15 +49,22 @@ func (m *Model) sidebarLines(w, h int) []string {
 		lines = append(lines, pad.Render(" "+itemMutedStyle.Render("press n to create one")))
 		blank()
 	default:
-		start := m.scrollOffset(len(visible), listHeight)
-		for i := start; i < len(visible) && len(lines) < h-2; i++ {
-			lines = append(lines, pad.Render(m.sessionLine(visible[i], i == m.cursor, w)))
-			m.rowSessions = append(m.rowSessions, i)
+		// A session can take more than one row, so the list is laid out first
+		// and then scrolled by row rather than by session.
+		rows := m.listRows(visible, w)
+		start := scrollOffset(cursorRow(rows, m.cursor), len(rows), listHeight)
+		for i := start; i < len(rows) && len(lines) < h-reserved; i++ {
+			lines = append(lines, pad.Render(rows[i].text))
+			m.rowSessions = append(m.rowSessions, rows[i].session)
 		}
 	}
 
-	for len(lines) < h-2 {
+	for len(lines) < h-reserved {
 		lines = append(lines, pad.Render(""))
+		blank()
+	}
+	for _, line := range usage {
+		lines = append(lines, pad.Render(line))
 		blank()
 	}
 	if h >= 2 {
@@ -71,6 +82,65 @@ func (m *Model) sidebarLines(w, h int) []string {
 	return lines[:h]
 }
 
+// listRow is one rendered line of the session list, and the session it belongs
+// to so a click on it can be resolved.
+type listRow struct {
+	session int
+	text    string
+}
+
+// listRows renders every visible session, which is one row plus a second for
+// the task when the agent inside is working on something we can name.
+func (m *Model) listRows(visible []tmux.Session, w int) []listRow {
+	rows := make([]listRow, 0, len(visible)+1)
+	for i, s := range visible {
+		selected := i == m.cursor
+		rows = append(rows, listRow{session: i, text: m.sessionLine(s, selected, w)})
+		if task := m.taskLine(s, selected, w); task != "" {
+			rows = append(rows, listRow{session: i, text: task})
+		}
+	}
+	return rows
+}
+
+// cursorRow finds the first row belonging to the selected session.
+func cursorRow(rows []listRow, cursor int) int {
+	for i, r := range rows {
+		if r.session == cursor {
+			return i
+		}
+	}
+	return 0
+}
+
+// taskLine renders what the agent was last asked to do, indented under its
+// session. It returns "" when there is nothing to say.
+func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
+	if m.cfg.HideTask {
+		return ""
+	}
+	info, ok := m.agents[s.Name]
+	if !ok {
+		return ""
+	}
+	text := info.Task
+	if info.Status.NeedsInput() && info.Detail != "" {
+		// What it is waiting for beats what it was asked - that is the thing
+		// standing between you and the session continuing.
+		text = info.Detail
+	}
+	if text == "" {
+		return ""
+	}
+
+	const indent = 4
+	body := truncate(text, max(1, w-indent-1))
+	if selected {
+		return itemSelectedStyle.Render(padTo(strings.Repeat(" ", indent)+body, w))
+	}
+	return strings.Repeat(" ", indent) + faintStyle.Render(body)
+}
+
 // sessionLine renders one row: marker, status dot, name, and a right-aligned
 // hint about what is running.
 func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
@@ -78,10 +148,7 @@ func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
 	if selected {
 		marker = "▸ "
 	}
-	dot := "○"
-	if s.Attached > 0 {
-		dot = "●"
-	}
+	dot, dotColor := m.statusDot(s)
 
 	hint := s.Command
 	if !s.Managed {
@@ -107,10 +174,31 @@ func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
 			padTo(marker+dot+" "+name+strings.Repeat(" ", gap)+hint, w))
 	}
 	return marker +
-		lipgloss.NewStyle().Foreground(kindColor(sessionKind(s))).Render(dot) + " " +
+		lipgloss.NewStyle().Foreground(dotColor).Render(dot) + " " +
 		itemStyle.Render(name) +
 		strings.Repeat(" ", gap) +
 		itemMutedStyle.Render(hint)
+}
+
+// statusDot picks the glyph in front of a session's name. For a session with
+// an agent in it that is what the agent is doing; otherwise it falls back to
+// whether tmux has a client attached.
+func (m *Model) statusDot(s tmux.Session) (string, lipgloss.TerminalColor) {
+	kind := sessionKind(s)
+	switch m.agents[s.Name].Status {
+	case agent.Waiting:
+		// Deliberately the odd one out: this is the only state that is stuck
+		// until you do something about it.
+		return "▲", colDanger
+	case agent.Busy, agent.Shell:
+		return "◐", kindColor(kind)
+	case agent.Idle:
+		return "○", colMuted
+	}
+	if s.Attached > 0 {
+		return "●", kindColor(kind)
+	}
+	return "○", kindColor(kind)
 }
 
 func (m *Model) sidebarLegend() string {
@@ -120,12 +208,12 @@ func (m *Model) sidebarLegend() string {
 	return footerStyle.Render("n new  x kill  ? help")
 }
 
-// scrollOffset keeps the cursor inside the visible window.
-func (m *Model) scrollOffset(total, height int) int {
+// scrollOffset keeps the given row inside the visible window.
+func scrollOffset(row, total, height int) int {
 	if height <= 0 || total <= height {
 		return 0
 	}
-	offset := m.cursor - height/2
+	offset := row - height/2
 	if offset < 0 {
 		offset = 0
 	}

@@ -10,10 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/clip"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
+	"github.com/dpws/berth/internal/usage"
 )
 
 type focusArea int
@@ -36,6 +38,18 @@ const (
 
 // attachDelay debounces attaching while the user scrolls the list.
 const attachDelay = 120 * time.Millisecond
+
+// How long a message in the footer lasts. It holds at full strength, then
+// fades out and gives the row back to the key hints. Errors hold longer: a
+// missed error costs more than a missed "created api".
+const (
+	statusHold      = 4 * time.Second
+	statusErrorHold = 8 * time.Second
+	statusFade      = 900 * time.Millisecond
+	// statusFrame is how often the fade is redrawn, and only while one is
+	// running - nothing ticks at this rate when the footer is idle.
+	statusFrame = 80 * time.Millisecond
+)
 
 // Model is the root Bubble Tea model.
 type Model struct {
@@ -72,6 +86,47 @@ type Model struct {
 
 	status      string
 	statusIsErr bool
+	// statusAt is when the message landed, which is what the fade is measured
+	// from. statusTicking keeps one redraw chain running rather than starting
+	// a fresh one on every message that arrives mid-fade.
+	statusAt      time.Time
+	statusTicking bool
+
+	// usageTracker reads the agents' own logs; it holds per-file state between
+	// refreshes, so it is created once and reused.
+	usageTracker *usage.Tracker
+	usage        map[string]usage.Limits
+
+	// agentWatcher reads what the agents are doing; like the usage tracker it
+	// keeps its place in their logs, so it is created once and reused.
+	agentWatcher *agent.Watcher
+	agents       map[string]agent.Info
+
+	// sel is the run of cells being dragged over the session, or the last one
+	// dragged. Selection is berth's own rather than the terminal's: the
+	// terminal would happily select straight across the sidebar and the
+	// divider, because it knows nothing about where berth drew them.
+	sel *term.Selection
+	// dragging is set once a press has moved far enough to be a drag rather
+	// than a click.
+	dragging bool
+	// pressed holds a press that has not been forwarded yet, because until the
+	// button comes up berth does not know whether it was a click for the
+	// session or the start of a selection.
+	pressed *tea.MouseMsg
+	// clipboard is a copy waiting to be handed to the terminal on the next
+	// frame, as an OSC 52 sequence.
+	clipboard string
+
+	// mouseOn tracks whether berth is capturing the mouse. Capturing it is what
+	// lets you click a row and scroll a session, and also what stops your
+	// terminal doing its own text selection, so it can be turned off and on
+	// again without restarting.
+	mouseOn bool
+
+	// title is the last window title berth set, so the escape sequence is only
+	// written when it actually changes rather than on every refresh tick.
+	title string
 
 	quitting bool
 }
@@ -88,13 +143,21 @@ func New(cfg config.Config) *Model {
 	dir.CharLimit = 512
 	dir.Prompt = ""
 
-	return &Model{
+	m := &Model{
 		cfg:        cfg,
 		nameInput:  name,
 		dirInput:   dir,
 		newKind:    tmux.KindClaude,
 		appFocused: true,
+		mouseOn:    cfg.Mouse,
 	}
+	if !cfg.HideUsage {
+		m.usageTracker = usage.NewTracker()
+	}
+	if !cfg.HideAgentStatus {
+		m.agentWatcher = agent.NewWatcher()
+	}
+	return m
 }
 
 // ---------------------------------------------------------------- messages
@@ -113,6 +176,14 @@ type statusMsg struct {
 
 type tickMsg time.Time
 
+// statusTickMsg advances the fade of the message in the footer.
+type statusTickMsg struct{}
+
+// usageTickMsg drives the slow poll of the agents' rate limits.
+type usageTickMsg time.Time
+
+type usageMsg map[string]usage.Limits
+
 type attachMsg struct {
 	name string
 	gen  int
@@ -130,7 +201,11 @@ type imagePasteMsg struct {
 // ---------------------------------------------------------------- lifecycle
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(listSessions(), tickCmd(m.cfg.RefreshMillis))
+	cmds := []tea.Cmd{listSessions(), tickCmd(m.cfg.RefreshMillis)}
+	if m.usageTracker != nil {
+		cmds = append(cmds, m.readUsage())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Close releases the attached tmux client. Safe to call more than once.
@@ -160,6 +235,92 @@ func tickCmd(ms int) tea.Cmd {
 	})
 }
 
+func usageTickCmd(sec int) tea.Cmd {
+	if sec <= 0 {
+		sec = 30
+	}
+	return tea.Tick(time.Duration(sec)*time.Second, func(t time.Time) tea.Msg {
+		return usageTickMsg(t)
+	})
+}
+
+// readUsage re-reads the agents' logs off the update loop.
+func (m *Model) readUsage() tea.Cmd {
+	tracker := m.usageTracker
+	if tracker == nil {
+		return nil
+	}
+	return func() tea.Msg { return usageMsg(tracker.Refresh()) }
+}
+
+// readAgents refreshes what each session's agent is doing. It reads small
+// files and the tails of logs it is already following, so it rides along with
+// the session list rather than polling on its own.
+func (m *Model) readAgents(sessions []tmux.Session) {
+	if m.agentWatcher == nil {
+		return
+	}
+	m.agents = m.agentWatcher.Refresh(sessions)
+}
+
+// titleCmd sets the terminal's window title, or returns nil when it already
+// says the right thing. Terminals redraw their title bar on every OSC write,
+// so repeating one is visible flicker on some of them.
+func (m *Model) titleCmd() tea.Cmd {
+	if m.cfg.HideWindowTitle {
+		return nil
+	}
+	want := m.windowTitle()
+	if want == m.title {
+		return nil
+	}
+	m.title = want
+	return tea.SetWindowTitle(want)
+}
+
+// windowTitle names the selected session, so berth is identifiable among a row
+// of terminal tabs rather than showing up as another anonymous shell.
+func (m *Model) windowTitle() string {
+	// A session blocked on you is worth knowing about from the tab bar alone,
+	// so it goes first, where it survives the tab being truncated.
+	prefix := ""
+	switch n := agent.AnyWaiting(m.agents); {
+	case n == 1:
+		prefix = "● "
+	case n > 1:
+		prefix = fmt.Sprintf("●%d ", n)
+	}
+
+	s, ok := m.selected()
+	if !ok {
+		return prefix + "berth"
+	}
+	return fmt.Sprintf("%s%s (%s) — berth", prefix, safeTitle(s.Name), sessionKind(s))
+}
+
+// titleNameMax bounds the session name in the title. Terminals truncate long
+// titles themselves, but not always gracefully.
+const titleNameMax = 64
+
+// safeTitle makes a session name fit to interpolate into an escape sequence.
+// The title is written as OSC 2, which a control character in the name could
+// cut short or steer - tmux escapes those on the way out, but a name berth did
+// not create is not berth's to trust.
+func safeTitle(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		if b.Len() >= titleNameMax {
+			b.WriteString("…")
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // waitForPane blocks until the pane reports a change, then asks for a redraw.
 func waitForPane(p *term.Pane) tea.Cmd {
 	if p == nil {
@@ -173,7 +334,13 @@ func waitForPane(p *term.Pane) tea.Cmd {
 
 // ---------------------------------------------------------------- update
 
+// Update runs the message through the model, then keeps the terminal's title
+// in step with whatever the result left selected.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return m, tea.Batch(m.update(msg), m.titleCmd(), m.statusCmd())
+}
+
+func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -182,40 +349,55 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w, h := m.terminalSize()
 			m.pane.Resize(w, h)
 		}
-		return m, nil
+		return nil
 
 	case tickMsg:
-		return m, tea.Batch(listSessions(), tickCmd(m.cfg.RefreshMillis))
+		return tea.Batch(listSessions(), tickCmd(m.cfg.RefreshMillis))
+
+	case statusTickMsg:
+		m.statusTicking = false
+		if m.statusLife() >= 1 {
+			m.status = ""
+		}
+		return nil
+
+	case usageTickMsg:
+		return m.readUsage()
+
+	case usageMsg:
+		m.usage = msg
+		return usageTickCmd(m.cfg.UsageRefreshSeconds)
 
 	case sessionsMsg:
-		return m, m.applySessions(msg)
+		m.readAgents(msg)
+		return m.applySessions(msg)
 
 	case errMsg:
 		m.setStatus(msg.err.Error(), true)
-		return m, nil
+		return nil
 
 	case statusMsg:
 		m.setStatus(msg.text, msg.isErr)
 		if msg.selectName != "" {
 			m.selectName = msg.selectName
 		}
-		return m, listSessions()
+		return listSessions()
 
 	case attachMsg:
 		if msg.gen != m.attachGen {
-			return m, nil // superseded by a newer selection
+			return nil // superseded by a newer selection
 		}
 		m.pending = ""
-		return m, m.attach(msg.name)
+		return m.attach(msg.name)
 
 	case imagePasteMsg:
 		if msg.err != nil {
 			m.setStatus("no image to paste - "+msg.err.Error(), true)
-			return m, nil
+			return nil
 		}
 		if m.pane == nil {
 			m.setStatus("no session to paste into", true)
-			return m, nil
+			return nil
 		}
 		// A trailing space separates the path from whatever is typed next.
 		m.pane.SendText(msg.result.Path + " ")
@@ -223,39 +405,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncPaneFocus()
 		m.setStatus(fmt.Sprintf("pasted %s from %s",
 			filepath.Base(msg.result.Path), msg.result.Source), false)
-		return m, nil
+		return nil
 
 	case paneMsg:
 		if msg.pane != m.pane {
-			return m, nil // a pane we already replaced
+			return nil // a pane we already replaced
 		}
 		if msg.pane.Exited() {
 			// The tmux client went away: the session was killed or the server
 			// detached us. Refresh and let the list decide what to show.
 			m.pane = nil
 			m.focus = focusSidebar
-			return m, listSessions()
+			return listSessions()
 		}
-		return m, waitForPane(msg.pane)
+		return waitForPane(msg.pane)
 
 	case tea.FocusMsg:
 		m.appFocused = true
 		m.syncPaneFocus()
-		return m, nil
+		return nil
 
 	case tea.BlurMsg:
 		m.appFocused = false
 		m.syncPaneFocus()
-		return m, nil
+		return nil
 
 	case tea.MouseMsg:
-		return m, m.handleMouse(msg)
+		if !m.mouseOn {
+			return nil // a leftover event from before the mouse was released
+		}
+		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
-		return m, m.handleKey(msg)
+		return m.handleKey(msg)
 	}
 
-	return m, nil
+	return nil
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
@@ -280,10 +465,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// The paste key is the one other combination berth keeps for itself
-	// while a session has focus, so it is configurable.
+	// The paste and quit keys are the other combinations berth keeps for
+	// itself while a session has focus, so both are configurable.
 	if m.cfg.PasteImageKey != "" && msg.String() == m.cfg.PasteImageKey {
 		return m.pasteImage()
+	}
+	if m.cfg.QuitKey != "" && msg.String() == m.cfg.QuitKey {
+		// Quitting is not destructive - the sessions are tmux's, and they keep
+		// running - so it does not ask first.
+		m.quitting = true
+		return tea.Quit
 	}
 
 	if m.focus == focusTerminal {
@@ -291,6 +482,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.focus = focusSidebar
 			return nil
 		}
+		m.clearSelection()
 		switch {
 		case msg.Paste:
 			m.pane.Paste(string(msg.Runes))
@@ -329,14 +521,103 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if y >= m.bodyHeight() {
 		return nil // the footer
 	}
-	if msg.Action == tea.MouseActionPress && m.focus != focusTerminal {
-		m.focus = focusTerminal
-		m.syncPaneFocus()
+	return m.handleTerminalMouse(msg, x, y)
+}
+
+// handleTerminalMouse decides between selecting text and handing the event to
+// the session.
+//
+// A drag selects, because that is what a drag does everywhere else and the
+// terminal cannot do it here - berth is holding the mouse, and were it not,
+// the terminal would select across the sidebar and divider as well. A click
+// still belongs to the session, so a press is held back until the button comes
+// up and it is clear which of the two happened.
+func (m *Model) handleTerminalMouse(msg tea.MouseMsg, x, y int) tea.Cmd {
+	forward := func(ev tea.MouseMsg, ex, ey int) {
+		if e, ok := term.ToMouse(ev, ex, ey); ok {
+			m.pane.SendMouse(e)
+		}
 	}
-	if ev, ok := term.ToMouse(msg, x, y); ok {
-		m.pane.SendMouse(ev)
+
+	switch {
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+		held := msg
+		m.pressed = &held
+		m.dragging = false
+		m.sel = &term.Selection{AnchorX: x, AnchorY: y, CursorX: x, CursorY: y}
+		return nil
+
+	case msg.Action == tea.MouseActionMotion && m.pressed != nil:
+		if m.sel == nil {
+			return nil
+		}
+		m.sel.CursorX, m.sel.CursorY = x, y
+		if !m.sel.Empty() {
+			m.dragging = true
+		}
+		return nil
+
+	case msg.Action == tea.MouseActionRelease && m.pressed != nil:
+		press := *m.pressed
+		m.pressed = nil
+		if !m.dragging {
+			// It was a click after all: give the session the press it never
+			// saw, then the release, and take the focus as before.
+			m.sel = nil
+			if m.focus != focusTerminal {
+				m.focus = focusTerminal
+				m.syncPaneFocus()
+			}
+			forward(press, press.X-m.sidebarWidth()-1, press.Y)
+			forward(msg, x, y)
+			return nil
+		}
+		m.dragging = false
+		return m.copySelection()
 	}
+
+	// Anything else - the wheel, the other buttons - is the session's.
+	forward(msg, x, y)
 	return nil
+}
+
+// copySelection puts the selected text on the clipboard.
+func (m *Model) copySelection() tea.Cmd {
+	if m.pane == nil || m.sel == nil {
+		return nil
+	}
+	text := m.pane.SelectedText(*m.sel)
+	if text == "" {
+		m.sel = nil
+		return nil
+	}
+	// OSC 52 hands the text to whatever terminal berth is talking to, which
+	// over SSH is the one in front of you rather than the remote machine.
+	m.clipboard = ansi.SetSystemClipboard(text)
+	lines := strings.Count(text, "\n") + 1
+	m.setStatus(fmt.Sprintf("copied %d %s", lines, plural(lines, "line", "lines")), false)
+	return nil
+}
+
+// selection is the range to draw highlighted, if any.
+func (m *Model) selection() *term.Selection {
+	if m.sel == nil || m.sel.Empty() {
+		return nil
+	}
+	return m.sel
+}
+
+// clearSelection drops the highlight once it stops meaning anything - a new
+// keystroke, or a different session.
+func (m *Model) clearSelection() {
+	m.sel, m.pressed, m.dragging = nil, nil, false
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func (m *Model) handleSidebarMouse(msg tea.MouseMsg) tea.Cmd {
@@ -431,6 +712,9 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 	case "?":
 		m.mode = modeHelp
 		return nil
+
+	case "m":
+		return m.toggleMouse()
 
 	case "R":
 		return listSessions()
@@ -703,6 +987,7 @@ func (m *Model) attach(name string) tea.Cmd {
 		m.pane = nil
 	}
 
+	m.clearSelection()
 	w, h := m.terminalSize()
 	pane, err := term.Attach(name, w, h)
 	if err != nil {
@@ -734,6 +1019,22 @@ func (m *Model) pasteImage() tea.Cmd {
 		result, err := clip.Fetch(opts)
 		return imagePasteMsg{result: result, err: err}
 	}
+}
+
+// toggleMouse hands the mouse back to your terminal, and takes it again.
+//
+// While berth is capturing it, dragging over the session selects nothing: the
+// drag is forwarded to the program in the pane instead of being the terminal's
+// own selection. Rather than making that a restart-and-edit-the-config affair,
+// it is a key.
+func (m *Model) toggleMouse() tea.Cmd {
+	m.mouseOn = !m.mouseOn
+	if m.mouseOn {
+		m.setStatus("mouse on - berth takes clicks and the wheel", false)
+		return tea.EnableMouseCellMotion
+	}
+	m.setStatus("mouse off - your terminal selects, berth stops clicking", false)
+	return tea.DisableMouse
 }
 
 func (m *Model) toggleFocus() {
@@ -768,6 +1069,35 @@ func (m *Model) syncFormFocus() {
 func (m *Model) setStatus(text string, isErr bool) {
 	m.status = text
 	m.statusIsErr = isErr
+	m.statusAt = time.Now()
+}
+
+// statusLife returns how far through its life the message is, from 0 when it
+// arrives to 1 once it has faded out entirely.
+func (m *Model) statusLife() float64 {
+	if m.status == "" {
+		return 1
+	}
+	hold := statusHold
+	if m.statusIsErr {
+		hold = statusErrorHold
+	}
+	age := time.Since(m.statusAt) - hold
+	if age <= 0 {
+		return 0
+	}
+	return float64(age) / float64(statusFade)
+}
+
+// statusCmd keeps a redraw running while a message is fading, and stops as
+// soon as the footer is quiet again. Riding on Update means the many places
+// that set a status do not each have to remember to schedule one.
+func (m *Model) statusCmd() tea.Cmd {
+	if m.status == "" || m.statusTicking {
+		return nil
+	}
+	m.statusTicking = true
+	return tea.Tick(statusFrame, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
 func (m *Model) selected() (tmux.Session, bool) {
@@ -845,6 +1175,12 @@ func (m *Model) View() string {
 	}
 
 	var b strings.Builder
+	// A pending copy rides out with this frame. OSC 52 draws nothing, so it is
+	// safe ahead of the rest, and clearing it here means it is sent once.
+	if m.clipboard != "" {
+		b.WriteString(m.clipboard)
+		m.clipboard = ""
+	}
 	for i := 0; i < bodyH; i++ {
 		b.WriteString(sidebar[i])
 		b.WriteString(div)
@@ -879,7 +1215,7 @@ func (m *Model) terminalLines(w, h int) []string {
 		return out
 	}
 
-	lines := m.pane.Render(m.focus == focusTerminal)
+	lines := m.pane.Render(m.focus == focusTerminal, m.selection())
 	for i := 0; i < h; i++ {
 		line := ""
 		if i < len(lines) {
@@ -901,8 +1237,13 @@ func (m *Model) footerView() string {
 		if m.pane != nil {
 			name = m.pane.Session
 		}
-		help = footerKeyStyle.Render("ctrl+o") + footerStyle.Render(" back to list") +
-			footerStyle.Render("  ·  keys go to ") + footerKeyStyle.Render(name)
+		help = footerKeyStyle.Render("ctrl+o") + footerStyle.Render(" back to list")
+		if m.cfg.QuitKey != "" {
+			// The only quit reachable without leaving the session first.
+			help += footerStyle.Render("  ·  ") +
+				footerKeyStyle.Render(m.cfg.QuitKey) + footerStyle.Render(" quit")
+		}
+		help += footerStyle.Render("  ·  keys go to ") + footerKeyStyle.Render(name)
 	default:
 		help = joinHelp(
 			"↑/↓", "move",
@@ -917,10 +1258,11 @@ func (m *Model) footerView() string {
 	}
 
 	if m.status != "" {
-		style := successStyle
+		color := colSuccess
 		if m.statusIsErr {
-			style = errorStyle
+			color = colDanger
 		}
+		style := lipgloss.NewStyle().Foreground(fadeColor(color, m.statusLife()))
 		help = style.Render(truncate(m.status, m.width))
 	}
 	return padTo(help, m.width)
@@ -1019,14 +1361,31 @@ func (m *Model) helpText() string {
 		{m.cfg.PasteImageKey, "paste an image path into the session"},
 		{"click", "select a row; click again to focus it"},
 		{"wheel", "scroll the list, or the focused session"},
+		{"drag", "select text in the session; copied on release"},
+		{"m", "hand the mouse to your terminal instead"},
 		{"R", "refresh the list now"},
 		{"q", "quit (sessions keep running)"},
+		{m.cfg.QuitKey, "quit from a focused session too"},
+	}
+	if m.cfg.QuitKey == "" {
+		rows = rows[:len(rows)-1]
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("berth") + "\n\n")
 	for _, r := range rows {
 		b.WriteString(fmt.Sprintf("%s  %s\n",
 			footerKeyStyle.Render(padTo(r[0], 12)), footerStyle.Render(r[1])))
+	}
+	if !m.cfg.HideAgentStatus {
+		b.WriteString("\n")
+		for _, r := range [][2]string{
+			{"◐", "the agent is working"},
+			{"▲", "the agent is waiting on you"},
+			{"○", "idle, or no client attached"},
+		} {
+			b.WriteString(fmt.Sprintf("%s  %s\n",
+				footerKeyStyle.Render(padTo(r[0], 12)), footerStyle.Render(r[1])))
+		}
 	}
 	b.WriteString("\n" + footerStyle.Render("any key to close"))
 	return b.String()

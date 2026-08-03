@@ -15,11 +15,12 @@ again, still running when you come back.
 ┌──────────────────┬─────────────────────────────────────┐
 │ BERTH 3          │ dpws@host:~/code/api $ claude       │
 │──────────────────│ ❯ refactor the request parser       │
-│▸ ● api    claude │                                     │
-│  ○ web    codex  │ (live - type straight into it)      │
+│▸ ◐ api    claude │                                     │
+│   refactor the … │ (live - type straight into it)      │
+│  ▲ web    codex  │                                     │
 │  ○ dots   bash   │                                     │
 │──────────────────│                                     │
-│ n new  x kill    │                                     │
+│ 5h  ▓▓▓░░░  28%  │                                     │
 └──────────────────┴─────────────────────────────────────┘
  ctrl+o back to list  ·  keys go to api
 ```
@@ -63,16 +64,21 @@ Requires Go 1.24+ and tmux 3.0+.
 ## Use
 
 ```sh
-berth              # launch the TUI
-berth ls           # print the session list and exit
+berth                # launch the TUI
+berth ls             # print the session list and exit
 berth -write-config  # drop a default config file to edit
+berth statusline     # Claude Code status line hook — see Rate limits
 ```
 
 ### Keys
 
 The list and the terminal take turns owning the keyboard. `ctrl+o` switches
 between them; while the terminal has focus **every other key goes to the
-session**, including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix.
+session**, including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix. The
+exceptions are `ctrl+y` (paste an image) and `ctrl+x` (quit), which berth keeps
+for itself so they work without going back to the list first — both are
+configurable, and `ctrl+x` in particular is worth remapping if you run emacs in
+a session, since emacs wants that key for itself.
 
 | Key | In the session list |
 | --- | --- |
@@ -84,14 +90,37 @@ session**, including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix.
 | `r` | rename the selected session |
 | `/` | filter by name |
 | `ctrl+y` | paste an image into the focused session |
+| drag | select text in the session, copied on release |
+| `m` | hand the mouse to your terminal entirely, and take it back |
 | `R` | refresh now |
 | `?` | help |
 | `q` | quit — sessions keep running |
+| `ctrl+x` | quit from anywhere, including a focused session |
 
 Mouse: click a row to select it, click again to hand it the keyboard, wheel to
 scroll the list. Over the terminal, clicks and the wheel go to the session.
-Set `"mouse": false` in the config to give the outer terminal its native text
-selection back.
+
+**Selecting text:** drag across the session. The text highlights as you go and
+lands on your clipboard when you let go — no modifier, and clicks still switch
+sessions. Over SSH it reaches the clipboard on *your* machine, not the remote
+one, because berth hands it to your terminal with OSC 52.
+
+berth does the selecting itself rather than leaving it to the terminal, and it
+has to. Mouse reporting is all-or-nothing per terminal, not per region: while
+berth holds the mouse so you can click a row, the terminal will not select
+anywhere. Shift-drag bypasses that in most terminals, but the terminal has no
+idea where berth drew the divider, so it happily selects the sidebar and the
+session together on every row. berth knows, and selects only the session.
+
+A drag selects; a plain click still goes through to the program in the session,
+so agents keep their own mouse handling. The highlight clears when you type or
+change session.
+
+If the copy does not arrive, your terminal is refusing OSC 52 — most support
+it, some ask you to turn it on (kitty's `clipboard_control`, xterm's
+`allowWindowOps`, iTerm2's "applications may access the clipboard"). Failing
+that, **`m`** hands the mouse back to the terminal entirely, at the cost of
+clicking rows until you press it again; `"mouse": false` starts that way.
 
 ## Config
 
@@ -110,8 +139,14 @@ Optional, at `~/.config/berth/config.json`:
   "session_options": ["mouse on"],
   "image_drop_dir": "/home/you/berth-drop",
   "paste_image_key": "ctrl+y",
+  "quit_key": "ctrl+x",
   "clip_agent_url": "http://127.0.0.1:8377",
-  "clip_agent_token": ""
+  "clip_agent_token": "",
+  "hide_usage": false,
+  "hide_agent_status": false,
+  "hide_task": false,
+  "hide_window_title": false,
+  "usage_refresh_seconds": 30
 }
 ```
 
@@ -121,6 +156,152 @@ berth creates — see *Tuning tmux* below. `claude_command` is what a
 `claude --model opus` or a wrapper script if you like. `hide_status_bar` turns
 tmux's status line off in sessions berth creates, since the sidebar already
 says which session you are in; sessions created elsewhere are left alone.
+`hide_agent_status` and `hide_task` control the indicator and the task line —
+see *What each session is doing*. `quit_key` quits from anywhere, including while a session has the keyboard;
+set it to `""` to hand the key back to your sessions, leaving `ctrl+o` then `q`
+as the way out. `hide_window_title` stops berth naming the selected session in
+the terminal's title bar — by default the tab reads `api (claude) — berth` and
+follows the cursor, so berth is findable in a row of terminal tabs instead of
+looking like one more anonymous shell. `usage_refresh_seconds` is how often the rate
+limit block is re-read.
+
+## What each session is doing
+
+Every agent session carries an indicator, and a dim second line saying what it
+was last asked to do:
+
+```
+┌────────────────────────────┐
+│ BERTH 4                    │
+│────────────────────────────│
+│▸ ◐ api              claude │
+│    rewrite the parser      │
+│  ▲ web               codex │
+│    approve running: rm -r… │
+│  ○ docs             claude │
+│    fix the install section │
+│  ○ dots              shell │
+└────────────────────────────┘
+```
+
+| | |
+| --- | --- |
+| `◐` | the agent is working |
+| `▲` | **the agent is waiting on you** — a question or a permission prompt |
+| `○` | idle, or for a plain shell, no client attached |
+
+When anything is waiting, berth also marks the terminal title — `● api (claude)
+— berth`, or `●2 …` for two — so a tab sitting in the background tells you a
+session is blocked without you having to look. The marker leads the title so it
+survives the tab being truncated.
+
+**Where this comes from.** Claude Code writes a status file per process at
+`~/.claude/sessions/<pid>.json`, and that `<pid>` is the same one tmux reports
+for the pane, so the match is exact rather than guessed. Its own vocabulary is
+`busy`, `waiting`, `idle` and `shell`, which is what the glyphs show; when it
+says what it is waiting for, that replaces the task on the second line. Codex
+records `task_started` and `task_complete` in its session rollout, which gives
+working-or-not honestly, but it logs no pid — so berth matches it by working
+directory, and two Codex sessions in the same directory can be confused for
+each other.
+
+**The task is the last thing you asked**, not the session's title. Both agents
+also record a title, but it is written once from the opening request and never
+updated, so in a session that has moved on to its third piece of work it is
+simply wrong. berth tracks the newest prompt instead, and falls back to the
+title only when there is no prompt yet.
+
+A killed agent leaves its status file behind saying `busy`, so anything not
+written to for ten minutes is ignored rather than shown as working forever.
+Set `"hide_agent_status": true` to drop the indicator and the title marker, or
+`"hide_task": true` to keep the indicator and drop the second line.
+
+Messages along the bottom — `created api`, `copied 2 lines`, a tmux error —
+hold for a few seconds and then fade out, giving the row back to the key hints.
+Errors hold twice as long as notices, on the grounds that missing one costs
+more. Nothing redraws at that rate when the footer is quiet.
+
+## Rate limits
+
+Select an agent session and the block above the legend says how much of its
+rate limit is gone:
+
+```
+┌──────────────────┬─────────────────────────
+│ BERTH 3          │
+│──────────────────│
+│▸ ● api    claude │
+│  ○ web    codex  │
+│──────────────────│
+│ 5h   ▓▓▓░░░  28% │
+│ week ▓▓▓▓▓░  61% │
+│ resets 14:20     │
+│──────────────────│
+│ n new  x kill    │
+└──────────────────┴─────────────────────────
+```
+
+**The two agents are not equally well served here, and the block says which
+you are looking at.**
+
+**Codex** numbers are exact. The Codex CLI records the server's own answer —
+percentage used, window length, reset time — in its session logs at
+`~/.codex/sessions`, and berth reads the most recent one. Whatever your plan
+reports is what you see, whether that is a 5-hour window, a weekly one, or
+both.
+
+**Claude** needs one thing wired up first, and then it is exact too.
+
+Claude Code pushes your real 5-hour and weekly windows — the same ones `/usage`
+draws — to whatever command you configure as its status line. Nothing is
+fetched and no credentials are involved: Claude Code hands the numbers to a
+program you chose. Point it at berth, in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "berth statusline"
+  }
+}
+```
+
+berth records the limits and prints a short line of its own
+(`Opus 5 · ctx 8% · 5h 24% · week 41%`). **Already have a status line you
+like?** Put it after `--` and berth passes the payload straight through, so you
+keep your own bar:
+
+```json
+{ "statusLine": { "type": "command", "command": "berth statusline -- ~/.claude/my-statusline.sh" } }
+```
+
+Until that is set up, Claude sessions show `run berth statusline` in place of
+the bars. **berth does not estimate.** It could add up the tokens in Claude
+Code's transcripts and call the result a rate limit, but that number is tokens
+spent rather than a share of your plan, and there is no published ceiling to
+turn one into the other — so it would be a figure that looks authoritative and
+is not. A blank that tells you how to fill it is worth more.
+
+Two things to know. `rate_limits` is only sent to Claude.ai subscribers, and
+only after a session's first response — so a brand new session shows nothing
+until it has answered once, and API-key users never get it. And the numbers
+only refresh while a Claude session is running, so a reading older than twenty
+minutes is labelled `as of 14:05` rather than passed off as live.
+
+**What berth will not do.** Claude Code's `/usage` reaches an internal endpoint
+with the Claude Code login token. Driving that from another program is
+automated access to a subscription without an API key, which [Anthropic's terms
+don't allow](https://www.anthropic.com/legal/consumer-terms), so berth doesn't
+— the status line above is the sanctioned way to the same numbers. An API key
+would make polling allowed but would not answer the question: API keys have no
+5-hour or weekly windows at all, being metered per minute and against a monthly
+spend cap, and reading even that needs an Admin key, which is not issued to
+individual accounts.
+
+The block costs four rows and is read from disk, so it polls far slower than
+the session list: `usage_refresh_seconds` (default 30). Reads are incremental —
+only the tail of each transcript is parsed after the first pass. Set
+`"hide_usage": true` to turn the whole thing off.
 
 ## Pasting images
 
@@ -156,6 +337,15 @@ Rebind with `"paste_image_key"`. It is one of only two keys berth keeps
 for itself while a session has focus — the other is `ctrl+o`.
 
 ### berth-clipd: the clipboard of the machine you are sitting at
+
+If `ctrl+y` reports **"the tunnel is open but berth-clipd is not running on the
+machine at the other end"**, the forward is fine and the far end is not
+answering. Check the agent is running there, and that it is on the same port
+and the same loopback family your `-R` points at — writing the forward as
+`localhost` resolves it on the machine running `ssh`, which is `::1` first on
+some systems. berth-clipd serves both loopback families, so `127.0.0.1` in the
+forward is the safe spelling either way. **"nothing is listening at ..."** is
+the other half: no tunnel at all.
 
 A clipboard can only be read by a process on the machine that owns it, and no
 terminal or SSH feature carries image bytes — OSC 52 is text-only by spec, and
@@ -199,7 +389,7 @@ inside the bundle.
 Then connect with the port forwarded:
 
 ```sh
-ssh -R 8377:localhost:8377 you@yourbox
+ssh -R 8377:127.0.0.1:8377 you@yourbox
 ```
 
 Or put it in your workstation's `~/.ssh/config` and forget about it:
@@ -316,6 +506,15 @@ TMUX_TMPDIR=/tmp/cmux-e2e ./berth
   notices and drops back to the list.
 - Set `BERTH_LOG=/path/to/log` to trace attaches when something misbehaves —
   a TUI has nowhere else to print.
+- Claude rate limits need `berth statusline` wired into Claude Code's
+  `statusLine` setting; without it that block says so rather than guessing.
+  Codex limits are always the server's own numbers. See *Rate limits*.
+- Codex sessions are matched to their logs by working directory, since Codex
+  records no process id; two Codex sessions in the same directory can be
+  reported as each other.
+- The terminal title berth sets survives it quitting — there is no way to ask a
+  terminal what its title was before. Most shells rewrite it at the next
+  prompt; if yours does not, `"hide_window_title": true` leaves it alone.
 
 ## License
 

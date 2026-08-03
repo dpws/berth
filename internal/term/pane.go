@@ -242,8 +242,9 @@ func (p *Pane) applyFocus() {
 
 // Render returns one styled string per row of the pane. When showCursor is
 // true the cell under the cursor is drawn reversed, standing in for a real
-// hardware cursor that a sub-region cannot own.
-func (p *Pane) Render(showCursor bool) []string {
+// hardware cursor that a sub-region cannot own. A non-nil sel is drawn
+// reversed too, which is how a selection looks in every other terminal.
+func (p *Pane) Render(showCursor bool, sel *Selection) []string {
 	w, h := p.Size()
 	buf := uv.NewScreenBuffer(w, h)
 
@@ -251,6 +252,24 @@ func (p *Pane) Render(showCursor bool) []string {
 	p.emu.Draw(buf, buf.Bounds())
 	pos := p.emu.CursorPosition()
 	p.emuMu.Unlock()
+
+	if sel != nil && !sel.Empty() {
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				if !sel.covers(x, y) {
+					continue
+				}
+				cell := buf.CellAt(x, y)
+				if cell == nil {
+					cell = uv.NewCell(buf.WidthMethod(), " ")
+				} else {
+					cell = cell.Clone()
+				}
+				cell.Style.Attrs ^= uv.AttrReverse
+				buf.SetCell(x, y, cell)
+			}
+		}
+	}
 
 	if showCursor && !p.cursorHide.Load() {
 		if pos.X >= 0 && pos.X < w && pos.Y >= 0 && pos.Y < h {

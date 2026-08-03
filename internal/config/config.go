@@ -38,11 +38,32 @@ type Config struct {
 	ImageDropDir string `json:"image_drop_dir"`
 	// PasteImageKey inserts the path of an image into the focused session.
 	PasteImageKey string `json:"paste_image_key"`
+	// QuitKey quits berth from anywhere, including while a session has the
+	// keyboard - the only other way out from there is ctrl+o then q. Set it to
+	// "" to give the key back to your sessions; emacs in particular wants
+	// ctrl+x for itself.
+	QuitKey string `json:"quit_key"`
 	// ClipAgentURL is a berth-clipd serving the clipboard of the machine
 	// you are sitting at. Empty disables the remote clipboard entirely.
 	ClipAgentURL string `json:"clip_agent_url"`
 	// ClipAgentToken is sent to the agent when it was started with -token.
 	ClipAgentToken string `json:"clip_agent_token"`
+	// HideUsage turns off the rate limit block under the session list.
+	HideUsage bool `json:"hide_usage"`
+	// HideAgentStatus turns off the busy / waiting / idle indicator in the
+	// session list, and with it the marker berth puts in the terminal title
+	// when a session needs you.
+	HideAgentStatus bool `json:"hide_agent_status"`
+	// HideTask drops the second line under each session that says what its
+	// agent was last asked to do.
+	HideTask bool `json:"hide_task"`
+	// HideWindowTitle stops berth naming the selected session in the
+	// terminal's title bar, for terminals or window managers where the title
+	// is set from elsewhere.
+	HideWindowTitle bool `json:"hide_window_title"`
+	// UsageRefreshSeconds is how often the limits are re-read. Reading them
+	// touches the agents' log files, so it is much slower than the tmux poll.
+	UsageRefreshSeconds int `json:"usage_refresh_seconds"`
 }
 
 // Default returns the configuration used when no config file exists.
@@ -66,7 +87,10 @@ func Default() Config {
 		Mouse:         true,
 		ImageDropDir:  filepath.Join(home, "berth-drop"),
 		PasteImageKey: "ctrl+y",
+		QuitKey:       "ctrl+x",
 		ClipAgentURL:  "http://127.0.0.1:8377",
+
+		UsageRefreshSeconds: 30,
 	}
 }
 
@@ -126,6 +150,11 @@ func (c Config) Save() error {
 	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
+// withDefaults fills in anything the config file left out.
+//
+// QuitKey is deliberately absent: Load starts from Default and unmarshals over
+// it, so a file that omits the key keeps the default, while one that sets it
+// to "" turns the key off. Filling it in here would make it undisablable.
 func (c Config) withDefaults() Config {
 	d := Default()
 	if c.ClaudeCommand == "" {
@@ -148,6 +177,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.RefreshMillis <= 0 {
 		c.RefreshMillis = d.RefreshMillis
+	}
+	if c.UsageRefreshSeconds <= 0 {
+		c.UsageRefreshSeconds = d.UsageRefreshSeconds
 	}
 	return c
 }

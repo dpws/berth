@@ -1,10 +1,16 @@
 package ui
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dpws/berth/internal/config"
+	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
 )
 
@@ -213,5 +219,391 @@ func TestExternalSessionKindIsSniffedFromTheCommand(t *testing.T) {
 		if got := sessionKind(s); got != want {
 			t.Errorf("a session running %q was classed as %q, want %q", command, got, want)
 		}
+	}
+}
+
+func TestQuitKeyWorksFromEitherHalf(t *testing.T) {
+	for _, focus := range []focusArea{focusSidebar, focusTerminal} {
+		m := newTestModel()
+		m.Update(sessions("alpha"))
+		m.focus = focus
+
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+		if !m.quitting {
+			t.Errorf("focus %v: ctrl+x did not quit", focus)
+		}
+		if cmd == nil {
+			t.Errorf("focus %v: ctrl+x returned no command", focus)
+		}
+	}
+}
+
+func TestQuitKeyCanBeDisabled(t *testing.T) {
+	m := newTestModel()
+	m.cfg.QuitKey = ""
+	m.Update(sessions("alpha"))
+	m.focus = focusTerminal
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if m.quitting {
+		t.Error("ctrl+x quit even though quit_key is empty")
+	}
+}
+
+// A dialog owns the keyboard, so the quit key waits its turn behind esc rather
+// than dropping the form out from under a half-typed name.
+func TestQuitKeyDoesNotFireInsideADialog(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if m.mode != modeNew {
+		t.Fatalf("n should open the new-session form, mode = %v", m.mode)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if m.quitting {
+		t.Error("ctrl+x quit from inside the new-session form")
+	}
+}
+
+func TestWindowTitleFollowsTheSelection(t *testing.T) {
+	m := newTestModel()
+	if got := m.windowTitle(); got != "berth" {
+		t.Errorf("with no sessions, title = %q, want %q", got, "berth")
+	}
+
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "api", Kind: tmux.KindClaude, Managed: true},
+		{Name: "web", Kind: tmux.KindCodex, Managed: true},
+	}))
+	if got := m.windowTitle(); got != "api (claude) — berth" {
+		t.Errorf("title = %q, want %q", got, "api (claude) — berth")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := m.windowTitle(); got != "web (codex) — berth" {
+		t.Errorf("after moving, title = %q, want %q", got, "web (codex) — berth")
+	}
+}
+
+// The title is rewritten on every message, so it has to stay quiet when
+// nothing about the selection changed.
+func TestTitleIsOnlySetWhenItChanges(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha", "bravo"))
+	if m.title == "" {
+		t.Fatal("title was never set")
+	}
+
+	if cmd := m.titleCmd(); cmd != nil {
+		t.Error("titleCmd fired again for an unchanged title")
+	}
+	// A refresh that changes nothing must not touch the title either.
+	m.Update(sessions("alpha", "bravo"))
+	if cmd := m.titleCmd(); cmd != nil {
+		t.Error("titleCmd fired after a no-op refresh")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.title != "bravo (shell) — berth" {
+		t.Errorf("title = %q, want it to follow the cursor", m.title)
+	}
+}
+
+func TestWindowTitleCanBeDisabled(t *testing.T) {
+	m := New(config.Default())
+	m.cfg.HideWindowTitle = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.Update(sessions("alpha"))
+
+	if cmd := m.titleCmd(); cmd != nil {
+		t.Error("hide_window_title still set the terminal title")
+	}
+	if m.title != "" {
+		t.Errorf("title recorded as %q, want it left alone", m.title)
+	}
+}
+
+// The title is written as an OSC escape sequence, so a session berth did not
+// create must not be able to smuggle control characters into it.
+func TestWindowTitleStripsControlCharacters(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "ok\x1b]0;pwned\x07\x0aname", Kind: tmux.KindShell},
+	}))
+
+	title := m.windowTitle()
+	for _, r := range title {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("title carries control character %q: %q", r, title)
+		}
+	}
+	// The printable remains are harmless: without the ESC that opens a sequence
+	// and the BEL that closes one, "]0;" is just text.
+	if !strings.HasPrefix(title, "ok") || !strings.Contains(title, "name") {
+		t.Errorf("title = %q, want the printable characters kept", title)
+	}
+}
+
+func TestWindowTitleBoundsLongNames(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: strings.Repeat("x", 400), Kind: tmux.KindShell},
+	}))
+
+	if got := len([]rune(m.windowTitle())); got > titleNameMax+32 {
+		t.Errorf("title is %d runes, want it bounded", got)
+	}
+}
+
+// Capturing the mouse is what stops the terminal doing its own selection, so
+// it has to be releasable without a restart.
+func TestMouseCanBeToggledAtRuntime(t *testing.T) {
+	m := newTestModel()
+	if !m.mouseOn {
+		t.Fatal("mouse should start on with the default config")
+	}
+
+	m.Update(sessions("alpha"))
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if m.mouseOn {
+		t.Error("m did not release the mouse")
+	}
+	if !strings.Contains(m.status, "select") {
+		t.Errorf("status = %q, want it to say selection is back", m.status)
+	}
+
+	// While released, stray events are ignored rather than acted on.
+	before := m.cursor
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if m.cursor != before {
+		t.Error("a mouse event moved the cursor after the mouse was released")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if !m.mouseOn {
+		t.Error("m did not take the mouse back")
+	}
+}
+
+func TestMouseStartsOffWhenConfigured(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mouse = false
+	m := New(cfg)
+	if m.mouseOn {
+		t.Error("mouse should start off when the config disables it")
+	}
+}
+
+// withPane attaches the model to a real tmux session, since mouse events over
+// the terminal half are ignored when nothing is attached - there is nothing
+// there to select or to forward to.
+func withPane(t *testing.T, m *Model) {
+	t.Helper()
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not on PATH")
+	}
+	name, err := tmux.New(tmux.NewOptions{
+		Name:    fmt.Sprintf("berth-uitest-%d", os.Getpid()),
+		Kind:    tmux.KindShell,
+		Command: "sh",
+	})
+	if err != nil {
+		t.Skipf("tmux new-session: %v", err)
+	}
+	t.Cleanup(func() { _ = tmux.Kill(name) })
+
+	pane, err := term.Attach(name, 40, 10)
+	if err != nil {
+		t.Skipf("attach: %v", err)
+	}
+	t.Cleanup(func() { _ = pane.Close() })
+	m.pane = pane
+}
+
+// terminalPress builds a mouse event over the terminal half of the screen.
+func terminalMouse(m *Model, x, y int, action tea.MouseAction, button tea.MouseButton) tea.MouseMsg {
+	return tea.MouseMsg{X: m.sidebarWidth() + 1 + x, Y: y, Action: action, Button: button}
+}
+
+// A drag over the session selects text; berth has the mouse, and the terminal
+// would otherwise select straight across the sidebar.
+func TestDragOverTheSessionSelects(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+
+	m.Update(terminalMouse(m, 2, 1, tea.MouseActionPress, tea.MouseButtonLeft))
+	if m.selection() != nil {
+		t.Error("a press alone should not select anything yet")
+	}
+	m.Update(terminalMouse(m, 9, 3, tea.MouseActionMotion, tea.MouseButtonLeft))
+
+	sel := m.selection()
+	if sel == nil {
+		t.Fatal("dragging did not start a selection")
+	}
+	if sel.AnchorX != 2 || sel.AnchorY != 1 || sel.CursorX != 9 || sel.CursorY != 3 {
+		t.Errorf("selection = %+v, want it to span the drag", *sel)
+	}
+}
+
+// A click is not a drag, and still belongs to the program in the session.
+func TestClickOverTheSessionIsNotASelection(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+
+	m.Update(terminalMouse(m, 4, 2, tea.MouseActionPress, tea.MouseButtonLeft))
+	m.Update(terminalMouse(m, 4, 2, tea.MouseActionRelease, tea.MouseButtonLeft))
+
+	if m.selection() != nil {
+		t.Error("a click left a selection behind")
+	}
+	if m.focus != focusTerminal {
+		t.Error("a click should hand the keyboard to the session")
+	}
+}
+
+// Typing moves the text the highlight was drawn over, so it has to go.
+func TestSelectionClearsOnInput(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+	m.focus = focusTerminal
+
+	m.Update(terminalMouse(m, 1, 1, tea.MouseActionPress, tea.MouseButtonLeft))
+	m.Update(terminalMouse(m, 8, 1, tea.MouseActionMotion, tea.MouseButtonLeft))
+	if m.selection() == nil {
+		t.Fatal("no selection to clear")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if m.selection() != nil {
+		t.Error("typing into the session left the highlight behind")
+	}
+}
+
+// The wheel is the session's, selection or not.
+func TestWheelIsNotASelection(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+	m.Update(terminalMouse(m, 3, 3, tea.MouseActionPress, tea.MouseButtonWheelDown))
+	if m.selection() != nil {
+		t.Error("the wheel started a selection")
+	}
+}
+
+func TestBlendHex(t *testing.T) {
+	cases := []struct {
+		from, to string
+		t        float64
+		want     string
+	}{
+		{"#000000", "#FFFFFF", 0, "#000000"},
+		{"#000000", "#FFFFFF", 1, "#FFFFFF"},
+		{"#000000", "#FFFFFF", 0.5, "#808080"},
+		{"#B3261E", "#FFFFFF", 0, "#B3261E"},
+		{"#204080", "#000000", 0.5, "#102040"},
+	}
+	for _, c := range cases {
+		if got := blendHex(c.from, c.to, c.t); got != c.want {
+			t.Errorf("blendHex(%s,%s,%v) = %s, want %s", c.from, c.to, c.t, got, c.want)
+		}
+	}
+	// Anything unparseable is returned untouched rather than turned to mush.
+	if got := blendHex("red", "#FFFFFF", 0.5); got != "red" {
+		t.Errorf("blendHex on a non-hex colour = %q", got)
+	}
+}
+
+// Each half of the pair fades toward its own background, so the caller does
+// not need to know which the terminal will use.
+func TestFadeColorMovesTowardBothBackgrounds(t *testing.T) {
+	c := colDanger
+	if got := fadeColor(c, 0); got != c {
+		t.Errorf("fadeColor at t=0 changed the colour: %+v", got)
+	}
+	gone := fadeColor(c, 1)
+	if gone.Light != "#FFFFFF" || gone.Dark != "#000000" {
+		t.Errorf("fadeColor at t=1 = %+v, want the two backgrounds", gone)
+	}
+	// Past the end is clamped, not extrapolated into nonsense.
+	if fadeColor(c, 5) != gone {
+		t.Error("fadeColor did not clamp beyond t=1")
+	}
+}
+
+func TestStatusHoldsThenFades(t *testing.T) {
+	m := newTestModel()
+	m.setStatus("created api", false)
+
+	if got := m.statusLife(); got != 0 {
+		t.Errorf("a fresh message is already fading: %v", got)
+	}
+	m.statusAt = time.Now().Add(-statusHold - statusFade/2)
+	if got := m.statusLife(); got <= 0 || got >= 1 {
+		t.Errorf("mid-fade life = %v, want between 0 and 1", got)
+	}
+	m.statusAt = time.Now().Add(-statusHold - statusFade)
+	if got := m.statusLife(); got < 1 {
+		t.Errorf("life = %v, want the message spent", got)
+	}
+}
+
+// An error is worth more than a confirmation, so it stays up longer.
+func TestErrorsHoldLongerThanNotices(t *testing.T) {
+	m := newTestModel()
+	m.setStatus("boom", true)
+	m.statusAt = time.Now().Add(-statusHold - statusFade)
+	if got := m.statusLife(); got != 0 {
+		t.Errorf("an error faded on the notice schedule: life = %v", got)
+	}
+}
+
+func TestStatusClearsItselfOnceSpent(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	m.setStatus("created api", false)
+
+	m.Update(statusTickMsg{})
+	if m.status == "" {
+		t.Fatal("the message went before it had been read")
+	}
+
+	m.statusAt = time.Now().Add(-statusErrorHold - statusFade)
+	m.Update(statusTickMsg{})
+	if m.status != "" {
+		t.Errorf("status = %q, want it cleared once spent", m.status)
+	}
+	// With the footer quiet again, nothing should keep ticking.
+	if cmd := m.statusCmd(); cmd != nil {
+		t.Error("a redraw was scheduled with no message to fade")
+	}
+}
+
+// A newer message restarts the clock rather than inheriting the old one's age.
+func TestNewMessageResetsTheClock(t *testing.T) {
+	m := newTestModel()
+	m.setStatus("first", false)
+	m.statusAt = time.Now().Add(-statusHold)
+
+	m.setStatus("second", false)
+	if got := m.statusLife(); got != 0 {
+		t.Errorf("life = %v, want the clock restarted", got)
+	}
+}
+
+// One chain of redraws, however many messages arrive during it.
+func TestOnlyOneFadeChainRuns(t *testing.T) {
+	m := newTestModel()
+	m.setStatus("first", false)
+
+	if cmd := m.statusCmd(); cmd == nil {
+		t.Fatal("no redraw scheduled for a new message")
+	}
+	if cmd := m.statusCmd(); cmd != nil {
+		t.Error("a second redraw chain started while one was already running")
 	}
 }

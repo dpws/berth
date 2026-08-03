@@ -29,7 +29,7 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) bool {
 }
 
 func screen(p *Pane) string {
-	return strings.Join(p.Render(false), "\n")
+	return strings.Join(p.Render(false, nil), "\n")
 }
 
 func newTestSession(t *testing.T, suffix string) string {
@@ -71,7 +71,7 @@ func TestPaneRendersSessionOutput(t *testing.T) {
 		t.Fatalf("output never appeared; screen was:\n%s", screen(pane))
 	}
 
-	lines := pane.Render(false)
+	lines := pane.Render(false, nil)
 	if len(lines) != 24 {
 		t.Errorf("Render returned %d lines, want 24", len(lines))
 	}
@@ -103,7 +103,7 @@ func TestPaneResizeReachesTheShell(t *testing.T) {
 		t.Fatalf("shell never saw the new width; screen was:\n%s", screen(pane))
 	}
 
-	if len(pane.Render(false)) != 15 {
+	if len(pane.Render(false, nil)) != 15 {
 		t.Errorf("Render should follow the new height")
 	}
 }

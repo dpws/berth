@@ -1,6 +1,12 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"fmt"
+	"math"
+	"strconv"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Palette. Kept small on purpose: the session list is chrome around someone
 // else's terminal output, so it should stay quiet.
@@ -46,6 +52,52 @@ var (
 	chipStyle       = lipgloss.NewStyle().Padding(0, 1).Foreground(colMuted)
 	chipActiveStyle = lipgloss.NewStyle().Padding(0, 1).Foreground(colText).Background(colSelBg).Bold(true)
 )
+
+// fadeColor blends c toward the terminal background, with t running 0 (as
+// written) to 1 (gone). Both halves of the adaptive pair are faded toward
+// their own background, so the caller does not have to know which one the
+// terminal will pick.
+func fadeColor(c lipgloss.AdaptiveColor, t float64) lipgloss.AdaptiveColor {
+	if t <= 0 {
+		return c
+	}
+	if t > 1 {
+		t = 1
+	}
+	return lipgloss.AdaptiveColor{
+		Light: blendHex(c.Light, "#FFFFFF", t),
+		Dark:  blendHex(c.Dark, "#000000", t),
+	}
+}
+
+// blendHex mixes two "#rrggbb" colors, returning from at t=0 and to at t=1.
+func blendHex(from, to string, t float64) string {
+	fr, fg, fb, ok := parseHex(from)
+	if !ok {
+		return from
+	}
+	tr, tg, tb, ok := parseHex(to)
+	if !ok {
+		return from
+	}
+	// math.Round, not a +0.5 truncation: the deltas here go negative when
+	// fading toward black, and truncation would stop a channel one short of
+	// the background instead of reaching it.
+	mix := func(a, b int) int { return int(math.Round(float64(a) + float64(b-a)*t)) }
+	return fmt.Sprintf("#%02X%02X%02X", mix(fr, tr), mix(fg, tg), mix(fb, tb))
+}
+
+// parseHex reads "#rrggbb".
+func parseHex(s string) (r, g, b int, ok bool) {
+	if len(s) != 7 || s[0] != '#' {
+		return 0, 0, 0, false
+	}
+	v, err := strconv.ParseUint(s[1:], 16, 32)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return int(v>>16) & 0xFF, int(v>>8) & 0xFF, int(v) & 0xFF, true
+}
 
 func kindColor(kind string) lipgloss.TerminalColor {
 	switch kind {

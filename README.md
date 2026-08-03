@@ -15,7 +15,7 @@ again, still running when you come back.
 ┌──────────────────┬─────────────────────────────────────┐
 │ BERTH 3          │ dpws@host:~/code/api $ claude       │
 │──────────────────│ ❯ refactor the request parser       │
-│▸ ◐ api    claude │                                     │
+│  ◐ api    claude │                                     │
 │   refactor the … │ (live - type straight into it)      │
 │  ? web    codex  │                                     │
 │  ○ dots   bash   │                                     │
@@ -366,7 +366,7 @@ rate limit is gone:
 ┌──────────────────┬─────────────────────────
 │ BERTH 3          │
 │──────────────────│
-│▸ ● api    claude │
+│  ● api    claude │
 │  ○ web    codex  │
 │──────────────────│
 │ 5h   ▓▓▓░░░  28% │
@@ -509,7 +509,7 @@ your workstation                      the box running berth
 ┌────────────────────┐               ┌──────────────────────────┐
 │ clipboard          │               │ ctrl+y                   │
 │   ↓                │               │   ↓                      │
-│ berth-clipd    │◀── ssh -R ────│ GET 127.0.0.1:8377/image │
+│ berth-clipd        │◀── ssh -R ────│ GET 127.0.0.1:8377/image │
 │ 127.0.0.1:8377     │─── PNG ──────▶│   ↓ path into the prompt │
 └────────────────────┘               └──────────────────────────┘
 ```

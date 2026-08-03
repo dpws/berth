@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -796,6 +797,11 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 	case "m":
 		return m.toggleMouse()
 
+	case "K":
+		return m.moveSession(-1)
+	case "J":
+		return m.moveSession(1)
+
 	case "R":
 		return listSessions()
 	}
@@ -1052,6 +1058,11 @@ func (m *Model) applySessions(sessions []tmux.Session) tea.Cmd {
 		}
 	}
 
+	// tmux lists sessions by name; berth shows them in the order you put them
+	// in, with anything never moved keeping tmux's arrangement at the end.
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].Order < sessions[j].Order
+	})
 	m.sessions = sessions
 
 	visible := m.visibleSessions()
@@ -1086,6 +1097,58 @@ func (m *Model) applySessions(sessions []tmux.Session) tea.Cmd {
 		return m.requestAttach(want)
 	}
 	return nil
+}
+
+// moveSession moves the selected session past its neighbour in the list.
+//
+// It writes a position for every session on screen rather than only the two
+// that swapped: until something is moved they all share "never placed", and
+// swapping two of those would change nothing. Numbering everything once, the
+// first time, is what makes the second move behave like the first.
+func (m *Model) moveSession(delta int) tea.Cmd {
+	visible := m.visibleSessions()
+	to := m.cursor + delta
+	if m.cursor < 0 || m.cursor >= len(visible) || to < 0 || to >= len(visible) {
+		return nil
+	}
+
+	// Swap where the two sit in the full list, so a move past a filtered-out
+	// session still lands where it looked like it would.
+	a := indexOfSession(m.sessions, visible[m.cursor].Name)
+	b := indexOfSession(m.sessions, visible[to].Name)
+	if a < 0 || b < 0 {
+		return nil
+	}
+	order := append([]tmux.Session(nil), m.sessions...)
+	order[a], order[b] = order[b], order[a]
+
+	moved := visible[m.cursor].Name
+	m.sessions = order
+	m.cursor = to
+	m.selectName = moved
+
+	names := make([]string, len(order))
+	for i, s := range order {
+		names[i] = s.Name
+	}
+	return func() tea.Msg {
+		for i, name := range names {
+			if err := tmux.SetOrder(name, i); err != nil {
+				return errMsg{err}
+			}
+		}
+		return statusMsg{selectName: moved}
+	}
+}
+
+// indexOfSession finds a session by name.
+func indexOfSession(sessions []tmux.Session, name string) int {
+	for i, s := range sessions {
+		if s.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *Model) moveCursor(delta int) tea.Cmd {
@@ -1658,6 +1721,7 @@ func (m *Model) helpText() string {
 		{"x", "kill the selected session"},
 		{"r", "rename the selected session"},
 		{"c", "give the session a colour"},
+		{"J / K", "move the session down or up the list"},
 		{"/", "filter by name"},
 		{"p", "start from a preset"},
 		{"P", "save this session as a preset"},

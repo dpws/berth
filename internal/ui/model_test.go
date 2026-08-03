@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -772,5 +773,104 @@ func TestCornerIsLitWithTheSession(t *testing.T) {
 	m.focus = focusSidebar
 	if !strings.Contains(m.footerRule(sideW), dividerStyle.Render("┴")) {
 		t.Error("the corner is lit while the list has the keyboard")
+	}
+}
+
+// ordered builds sessions already carrying berth's own positions.
+func ordered(names ...string) sessionsMsg {
+	out := make([]tmux.Session, 0, len(names))
+	for i, n := range names {
+		out = append(out, tmux.Session{
+			Name: n, Kind: tmux.KindShell, Managed: true, Order: i,
+		})
+	}
+	return sessionsMsg(out)
+}
+
+func sessionOrder(m *Model) []string {
+	out := make([]string, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// tmux lists sessions by name and has no notion of order, so berth's own has
+// to survive the list being refreshed under it.
+func TestSessionsAreShownInBerthsOrder(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "alpha", Order: 2}, {Name: "bravo", Order: 0}, {Name: "charlie", Order: 1},
+	}))
+	if got := sessionOrder(m); !slices.Equal(got, []string{"bravo", "charlie", "alpha"}) {
+		t.Errorf("order = %q, want berth's", got)
+	}
+}
+
+// A session never moved keeps tmux's arrangement, and sits after any that have
+// been placed, rather than jumping to the front.
+func TestUnplacedSessionsKeepTmuxsOrder(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "new-a", Order: tmux.NoOrder},
+		{Name: "placed", Order: 0},
+		{Name: "new-b", Order: tmux.NoOrder},
+	}))
+	if got := sessionOrder(m); !slices.Equal(got, []string{"placed", "new-a", "new-b"}) {
+		t.Errorf("order = %q, want the placed one first", got)
+	}
+}
+
+func TestMovingASessionUpAndDown(t *testing.T) {
+	m := newTestModel()
+	m.Update(ordered("alpha", "bravo", "charlie"))
+
+	m.cursor = 2 // charlie
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "charlie", "bravo"}) {
+		t.Errorf("after K: %q", got)
+	}
+	// The cursor follows the session, not the position.
+	if got := selectedName(t, m); got != "charlie" {
+		t.Errorf("cursor left on %q, want it following charlie", got)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo", "charlie"}) {
+		t.Errorf("after J: %q", got)
+	}
+}
+
+func TestMovingStopsAtTheEnds(t *testing.T) {
+	m := newTestModel()
+	m.Update(ordered("alpha", "bravo"))
+
+	m.cursor = 0
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo"}) {
+		t.Errorf("moving the first session up changed the order: %q", got)
+	}
+	m.cursor = 1
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo"}) {
+		t.Errorf("moving the last session down changed the order: %q", got)
+	}
+}
+
+// With a filter on, a move should land where it looked like it would: past the
+// next session you can see, not the next one in the full list.
+func TestMovingPastAFilteredOutSession(t *testing.T) {
+	m := newTestModel()
+	m.Update(ordered("api-one", "hidden", "api-two"))
+	m.filter = "api"
+
+	m.cursor = 0 // api-one, with api-two next on screen
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+
+	if got := sessionOrder(m); !slices.Equal(got, []string{"api-two", "hidden", "api-one"}) {
+		t.Errorf("order = %q, want the two visible sessions swapped", got)
+	}
+	if got := selectedName(t, m); got != "api-one" {
+		t.Errorf("cursor on %q, want it still on the moved session", got)
 	}
 }

@@ -41,6 +41,9 @@ const (
 	// optColor is a name from berth's palette rather than a colour value, so
 	// the same session reads correctly on a light terminal and a dark one.
 	optColor = "@berth_color"
+	// optOrder is where a session sits in berth's list. tmux has no notion of
+	// session order - it lists them by name - so this is berth's own.
+	optOrder = "@berth_order"
 )
 
 // sep delimits fields in -F output. A raw tab is unambiguous: tmux escapes
@@ -62,6 +65,7 @@ var listFormat = strings.Join([]string{
 	"#{" + optManaged + "}",
 	"#{" + optKind + "}",
 	"#{" + optColor + "}",
+	"#{" + optOrder + "}",
 }, sep)
 
 // Session is a tmux session as berth cares about it.
@@ -76,7 +80,10 @@ type Session struct {
 	PanePID  int    // pid of the process the pane was started with
 	Kind     string // KindClaude, KindShell, or "" for foreign sessions
 	Color    string // a name from berth's palette, or "" for the kind's own
-	Managed  bool   // created by berth
+	// Order is where berth shows the session. Unordered sessions carry
+	// NoOrder and keep tmux's own arrangement, after any that are ordered.
+	Order   int
+	Managed bool // created by berth
 }
 
 // IsClaude reports whether the session is running Claude Code.
@@ -113,8 +120,12 @@ func Available() error {
 	return nil
 }
 
-// List returns every session on the tmux server, oldest first. A server that
-// is not running yields an empty list rather than an error.
+// NoOrder marks a session berth has never been asked to place.
+const NoOrder = 1 << 30
+
+// List returns every session on the tmux server. tmux lists them by name; the
+// Order field carries berth's own arrangement, which the caller applies. A
+// server that is not running yields an empty list rather than an error.
 func List() ([]Session, error) {
 	out, err := run("list-sessions", "-F", listFormat)
 	if err != nil {
@@ -130,7 +141,7 @@ func List() ([]Session, error) {
 			continue
 		}
 		f := strings.Split(line, sep)
-		if len(f) < 11 {
+		if len(f) < 12 {
 			continue
 		}
 		s := Session{
@@ -145,6 +156,7 @@ func List() ([]Session, error) {
 			Managed:  f[8] == "1",
 			Kind:     f[9],
 			Color:    f[10],
+			Order:    order(f[11]),
 		}
 		sessions = append(sessions, s)
 	}
@@ -209,6 +221,22 @@ func New(o NewOptions) (string, error) {
 		}
 	}
 	return name, nil
+}
+
+// SetOrder records where a session sits in berth's list.
+func SetOrder(session string, n int) error {
+	_, err := run("set-option", "-t", optionTarget(session), optOrder, strconv.Itoa(n))
+	return err
+}
+
+// order parses a stored position, treating anything unset or unreadable as
+// never having been placed.
+func order(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n < 0 {
+		return NoOrder
+	}
+	return n
 }
 
 // SetColor tags a session with a colour name, or clears it when name is empty.

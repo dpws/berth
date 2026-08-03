@@ -89,6 +89,7 @@ a session, since emacs wants that key for itself.
 | `x` | kill the selected session (asks first) |
 | `r` | rename the selected session |
 | `c` | give the session a colour |
+| `J` / `K` | move the session down or up the list |
 | `/` | filter by name |
 | `p` | start a session from a preset |
 | `P` | save the selected session as a preset |
@@ -200,6 +201,17 @@ being silently rewritten into a longer path. Directories only — this is the
 field that says where a session starts — and hidden ones stay out of the way
 until you type the leading dot. `↑`/`↓` move between fields, since `tab` is
 busy completing.
+
+### Ordering
+
+tmux has no idea of session order — it lists them alphabetically and offers no
+way to move one. `J` and `K` move the selected session down and up, and berth
+remembers where you put it on the tmux session itself, so the arrangement
+survives berth restarting.
+
+A session you have never moved keeps tmux's own order and sits after the ones
+you have placed, rather than jumping to the front. Moving with a filter on
+swaps with the next session you can *see*, not the next one in the full list.
 
 ### Colours
 

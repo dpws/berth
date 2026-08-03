@@ -192,3 +192,30 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// PanePID is how berth matches a session to the agent running inside it, so a
+// change to the -F field order that drops it must fail loudly.
+func TestListReportsPanePID(t *testing.T) {
+	requireTmux(t)
+	name := testName(t, "panepid")
+	created, err := New(NewOptions{Name: name, Kind: KindShell, Command: "sh"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer Kill(created)
+
+	sessions, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, s := range sessions {
+		if s.Name != created {
+			continue
+		}
+		if s.PanePID <= 0 {
+			t.Errorf("PanePID = %d, want the pane's process id", s.PanePID)
+		}
+		return
+	}
+	t.Fatalf("session %q not listed", created)
+}

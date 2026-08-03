@@ -44,6 +44,7 @@ var listFormat = strings.Join([]string{
 	"#{session_activity}",
 	"#{session_path}",
 	"#{pane_current_command}",
+	"#{pane_pid}",
 	"#{" + optManaged + "}",
 	"#{" + optKind + "}",
 }, sep)
@@ -57,6 +58,7 @@ type Session struct {
 	Activity time.Time
 	Dir      string
 	Command  string // command running in the session's active pane
+	PanePID  int    // pid of the process the pane was started with
 	Kind     string // KindClaude, KindShell, or "" for foreign sessions
 	Managed  bool   // created by berth
 }
@@ -112,7 +114,7 @@ func List() ([]Session, error) {
 			continue
 		}
 		f := strings.Split(line, sep)
-		if len(f) < 9 {
+		if len(f) < 10 {
 			continue
 		}
 		s := Session{
@@ -123,8 +125,9 @@ func List() ([]Session, error) {
 			Activity: unix(f[4]),
 			Dir:      f[5],
 			Command:  f[6],
-			Managed:  f[7] == "1",
-			Kind:     f[8],
+			PanePID:  atoi(f[7]),
+			Managed:  f[8] == "1",
+			Kind:     f[9],
 		}
 		sessions = append(sessions, s)
 	}

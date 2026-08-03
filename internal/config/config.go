@@ -1,0 +1,175 @@
+// Package config loads user configuration for berth.
+package config
+
+import (
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+// Config controls how berth creates and displays sessions.
+type Config struct {
+	// ClaudeCommand is run inside sessions of kind "claude".
+	ClaudeCommand string `json:"claude_command"`
+	// CodexCommand is run inside sessions of kind "codex".
+	CodexCommand string `json:"codex_command"`
+	// ShellCommand is run inside sessions of kind "shell". Empty means $SHELL.
+	ShellCommand string `json:"shell_command"`
+	// DefaultDir is the working directory suggested for new sessions.
+	DefaultDir string `json:"default_dir"`
+	// SidebarWidth is the preferred width of the session list, in columns.
+	SidebarWidth int `json:"sidebar_width"`
+	// RefreshMillis is how often the session list is polled from tmux.
+	RefreshMillis int `json:"refresh_millis"`
+	// HideStatusBar turns tmux's own status bar off in sessions we create.
+	HideStatusBar bool `json:"hide_status_bar"`
+	// Mouse forwards clicks and the scroll wheel to the focused session, and
+	// lets you click a row in the session list. Turning it off gives the
+	// outer terminal its native text selection back.
+	Mouse bool `json:"mouse"`
+	// SessionOptions are tmux "set-option" arguments applied to sessions
+	// berth creates, for example ["mouse on"]. Sessions started elsewhere
+	// are never touched, and server-wide options belong in ~/.tmux.conf.
+	SessionOptions []string `json:"session_options"`
+	// ImageDropDir is scanned for images when the clipboard has none. Over
+	// SSH this is the only workable source, so it is on by default.
+	ImageDropDir string `json:"image_drop_dir"`
+	// PasteImageKey inserts the path of an image into the focused session.
+	PasteImageKey string `json:"paste_image_key"`
+	// ClipAgentURL is a berth-clipd serving the clipboard of the machine
+	// you are sitting at. Empty disables the remote clipboard entirely.
+	ClipAgentURL string `json:"clip_agent_url"`
+	// ClipAgentToken is sent to the agent when it was started with -token.
+	ClipAgentToken string `json:"clip_agent_token"`
+}
+
+// Default returns the configuration used when no config file exists.
+func Default() Config {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	return Config{
+		ClaudeCommand: "claude",
+		CodexCommand:  "codex",
+		ShellCommand:  shell,
+		DefaultDir:    home,
+		SidebarWidth:  28,
+		RefreshMillis: 2000,
+		HideStatusBar: true,
+		Mouse:         true,
+		ImageDropDir:  dropDir(home),
+		PasteImageKey: "ctrl+y",
+		ClipAgentURL:  "http://127.0.0.1:8377",
+	}
+}
+
+// ImageCacheDir is where clipboard images are written before being handed to
+// a session.
+func ImageCacheDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return os.TempDir()
+	}
+	return filepath.Join(dir, "berth", "images")
+}
+
+// dropDir keeps using a claudemux-era drop folder when one is already there,
+// so images you left in it do not silently stop being found.
+func dropDir(home string) string {
+	if legacy := filepath.Join(home, "claudemux-drop"); exists(legacy) {
+		return legacy
+	}
+	return filepath.Join(home, "berth-drop")
+}
+
+// Path returns the location berth reads its config from. A config written
+// before the rename from claudemux is used when no new one exists yet.
+func Path() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, "berth", "config.json")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	if legacy := filepath.Join(dir, "claudemux", "config.json"); exists(legacy) {
+		return legacy
+	}
+	return path
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// Load reads the config file, falling back to defaults for anything missing.
+// A missing file is not an error.
+func Load() (Config, error) {
+	cfg := Default()
+	path := Path()
+	if path == "" {
+		return cfg, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cfg, nil
+		}
+		return cfg, err
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Default(), err
+	}
+	return cfg.withDefaults(), nil
+}
+
+// Save writes cfg to the config path, creating parent directories.
+func (c Config) Save() error {
+	path := Path()
+	if path == "" {
+		return errors.New("no user config directory available")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func (c Config) withDefaults() Config {
+	d := Default()
+	if c.ClaudeCommand == "" {
+		c.ClaudeCommand = d.ClaudeCommand
+	}
+	if c.CodexCommand == "" {
+		c.CodexCommand = d.CodexCommand
+	}
+	if c.PasteImageKey == "" {
+		c.PasteImageKey = d.PasteImageKey
+	}
+	if c.ShellCommand == "" {
+		c.ShellCommand = d.ShellCommand
+	}
+	if c.DefaultDir == "" {
+		c.DefaultDir = d.DefaultDir
+	}
+	if c.SidebarWidth <= 0 {
+		c.SidebarWidth = d.SidebarWidth
+	}
+	if c.RefreshMillis <= 0 {
+		c.RefreshMillis = d.RefreshMillis
+	}
+	return c
+}

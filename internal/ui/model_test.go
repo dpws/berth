@@ -756,3 +756,21 @@ func TestGutterSeparatesTheDividerFromTheSession(t *testing.T) {
 		t.Error("a click in the gutter moved the focus")
 	}
 }
+
+// The vertical divider and the rule beneath it are lit together while a
+// session has the keyboard; a dim join would break the line in half.
+func TestCornerIsLitWithTheSession(t *testing.T) {
+	withColour(t)
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	sideW := m.sidebarWidth()
+
+	m.focus = focusTerminal
+	if !strings.Contains(m.footerRule(sideW), focusedDivStyle.Render("┴")) {
+		t.Error("the corner is dim while the session has the keyboard")
+	}
+	m.focus = focusSidebar
+	if !strings.Contains(m.footerRule(sideW), dividerStyle.Render("┴")) {
+		t.Error("the corner is lit while the list has the keyboard")
+	}
+}

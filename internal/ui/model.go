@@ -38,6 +38,7 @@ const (
 	modeSettings
 	modePresets
 	modeSavePreset
+	modeColor
 )
 
 // attachDelay debounces attaching while the user scrolls the list.
@@ -144,6 +145,8 @@ type Model struct {
 	// config.
 	presets      []config.Preset
 	presetCursor int
+	// colorCursor is the palette entry highlighted while choosing a colour.
+	colorCursor int
 
 	// spinner advances the glyph on working sessions. It only ticks while
 	// something is working, so an idle berth redraws no more than before.
@@ -513,6 +516,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handlePresetsKey(msg)
 	case modeSavePreset:
 		return m.handleSavePresetKey(msg)
+	case modeColor:
+		return m.handleColorKey(msg)
 	}
 
 	// Ctrl+O toggles which half of the screen owns the keyboard. Everything
@@ -769,6 +774,9 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 		m.nameInput.CursorEnd()
 		m.nameInput.Focus()
 		return textinput.Blink
+
+	case "c":
+		return m.openColors()
 
 	case "p":
 		return m.openPresets()
@@ -1334,6 +1342,8 @@ func (m *Model) View() string {
 		return m.settingsView()
 	case modePresets:
 		return m.presetsView()
+	case modeColor:
+		return m.colorsView()
 	case modeNew, modeRename, modeConfirmKill, modeHelp, modeSavePreset:
 		return m.dialogView()
 	}
@@ -1431,8 +1441,14 @@ func (m *Model) footerRule(sideW int) string {
 	} else {
 		left = focusedDivStyle
 	}
+	corner := dividerStyle
+	if m.focus == focusTerminal {
+		// The divider above meets the rule here, and both are lit while the
+		// session has the keyboard - leaving the join dim breaks the line.
+		corner = focusedDivStyle
+	}
 	return left.Render(strings.Repeat("─", sideW)) +
-		dividerStyle.Render("┴") +
+		corner.Render("┴") +
 		right.Render(strings.Repeat("─", max(0, m.width-sideW-1)))
 }
 
@@ -1641,6 +1657,7 @@ func (m *Model) helpText() string {
 		{"n", "new session (Claude or shell)"},
 		{"x", "kill the selected session"},
 		{"r", "rename the selected session"},
+		{"c", "give the session a colour"},
 		{"/", "filter by name"},
 		{"p", "start from a preset"},
 		{"P", "save this session as a preset"},

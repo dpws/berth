@@ -38,6 +38,9 @@ var Starts = []string{StartNew, StartContinue, StartResume}
 const (
 	optManaged = "@berth"
 	optKind    = "@berth_kind"
+	// optColor is a name from berth's palette rather than a colour value, so
+	// the same session reads correctly on a light terminal and a dark one.
+	optColor = "@berth_color"
 )
 
 // sep delimits fields in -F output. A raw tab is unambiguous: tmux escapes
@@ -58,6 +61,7 @@ var listFormat = strings.Join([]string{
 	"#{pane_pid}",
 	"#{" + optManaged + "}",
 	"#{" + optKind + "}",
+	"#{" + optColor + "}",
 }, sep)
 
 // Session is a tmux session as berth cares about it.
@@ -71,6 +75,7 @@ type Session struct {
 	Command  string // command running in the session's active pane
 	PanePID  int    // pid of the process the pane was started with
 	Kind     string // KindClaude, KindShell, or "" for foreign sessions
+	Color    string // a name from berth's palette, or "" for the kind's own
 	Managed  bool   // created by berth
 }
 
@@ -125,7 +130,7 @@ func List() ([]Session, error) {
 			continue
 		}
 		f := strings.Split(line, sep)
-		if len(f) < 10 {
+		if len(f) < 11 {
 			continue
 		}
 		s := Session{
@@ -139,6 +144,7 @@ func List() ([]Session, error) {
 			PanePID:  atoi(f[7]),
 			Managed:  f[8] == "1",
 			Kind:     f[9],
+			Color:    f[10],
 		}
 		sessions = append(sessions, s)
 	}
@@ -203,6 +209,17 @@ func New(o NewOptions) (string, error) {
 		}
 	}
 	return name, nil
+}
+
+// SetColor tags a session with a colour name, or clears it when name is empty.
+// Colours are berth's own idea, so this touches nothing tmux itself reads.
+func SetColor(session, name string) error {
+	if name == "" {
+		_, err := run("set-option", "-t", optionTarget(session), "-u", optColor)
+		return err
+	}
+	_, err := run("set-option", "-t", optionTarget(session), optColor, name)
+	return err
 }
 
 // Kill destroys a session and everything running in it.

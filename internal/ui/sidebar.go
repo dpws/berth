@@ -35,13 +35,7 @@ func (m *Model) sidebarLines(w, h int) []string {
 	// Reserve the last two rows for the legend, plus whatever the usage block
 	// needs above it. Both are dropped first when the window is too short.
 	usage := m.usageBlock(w, h-len(lines)-2)
-	// A blank row below the block keeps its rule and the legend's from closing
-	// in on it.
-	spacer := 0
-	if len(usage) > 0 {
-		spacer = 1
-	}
-	reserved := 2 + len(usage) + spacer
+	reserved := 2 + len(usage)
 	listHeight := h - len(lines) - reserved
 	visible := m.visibleSessions()
 
@@ -71,10 +65,6 @@ func (m *Model) sidebarLines(w, h int) []string {
 	}
 	for _, line := range usage {
 		lines = append(lines, pad.Render(line))
-		blank()
-	}
-	for i := 0; i < spacer; i++ {
-		lines = append(lines, pad.Render(""))
 		blank()
 	}
 	if h >= 2 {
@@ -143,7 +133,8 @@ func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
 		return ""
 	}
 
-	const indent = 4
+	// Indented to sit under the name rather than the status glyph.
+	const indent = 3
 	body := truncate(text, max(1, w-indent-1))
 	if selected {
 		return itemSelectedStyle.Render(padTo(strings.Repeat(" ", indent)+body, w))
@@ -154,10 +145,9 @@ func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
 // sessionLine renders one row: marker, status dot, name, and a right-aligned
 // hint about what is running.
 func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
-	marker := "  "
-	if selected {
-		marker = "▸ "
-	}
+	// No marker for the selected row: the highlight already spans it, and an
+	// arrow beside it only takes width from the name.
+	const marker = " "
 	dot, dotColor := m.statusDot(s)
 
 	hint := s.Command
@@ -168,8 +158,8 @@ func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
 		hint = sessionKind(s)
 	}
 
-	// Layout: marker(2) + dot(1) + space(1) + name + gap + hint + space(1).
-	const fixed = 5
+	// Layout: space(1) + dot(1) + space(1) + name + gap + hint + space(1).
+	const fixed = 4
 	nameW := w - fixed - lipgloss.Width(hint) - 1
 	if nameW < 6 {
 		hint = ""
@@ -185,7 +175,7 @@ func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
 	}
 	return marker +
 		lipgloss.NewStyle().Foreground(dotColor).Render(dot) + " " +
-		itemStyle.Render(name) +
+		lipgloss.NewStyle().Foreground(sessionNameColor(s)).Render(name) +
 		strings.Repeat(" ", gap) +
 		itemMutedStyle.Render(hint)
 }
@@ -202,7 +192,7 @@ func (m *Model) statusDot(s tmux.Session) (string, lipgloss.TerminalColor) {
 	case agent.Waiting:
 		return "?", colDanger
 	case agent.Busy, agent.Shell:
-		return spinnerFrames[m.spinner%len(spinnerFrames)], colSuccess
+		return spinnerFrames[m.spinner%len(spinnerFrames)], workingColor(s)
 	case agent.Idle:
 		return "○", colIdle
 	}

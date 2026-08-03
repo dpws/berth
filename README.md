@@ -88,6 +88,7 @@ a session, since emacs wants that key for itself.
 | `n` | new session — name, kind, start mode, directory |
 | `x` | kill the selected session (asks first) |
 | `r` | rename the selected session |
+| `c` | give the session a colour |
 | `/` | filter by name |
 | `p` | start a session from a preset |
 | `P` | save the selected session as a preset |
@@ -200,6 +201,18 @@ field that says where a session starts — and hidden ones stay out of the way
 until you type the leading dot. `↑`/`↓` move between fields, since `tab` is
 busy completing.
 
+### Colours
+
+`c` gives the selected session a colour from a small palette. It marks the
+session's name and the spinner it shows while working, so a glance at the list
+says which project is which.
+
+Waiting and idle keep their own colours regardless: those say what a session is
+*doing*, and a colour you chose says which session it *is* — the second should
+not be able to drown out the first. Colours are stored on the tmux session as a
+palette name rather than a value, so they survive berth restarting and read
+correctly on a light terminal and a dark one alike.
+
 ### Presets
 
 A session you set up often is worth keeping. `P` saves the selected one as a
@@ -235,13 +248,13 @@ was last asked to do:
 ┌────────────────────────────┐
 │ BERTH 4                    │
 │────────────────────────────│
-│▸ ⠹ api              claude │
-│    rewrite the parser      │
-│  ? web               codex │
-│    approve running: rm -r… │
-│  ○ docs             claude │
-│    fix the install section │
-│  ○ dots              shell │
+│ ⠹ api               claude │
+│   rewrite the parser       │
+│ ? web                codex │
+│   approve running: rm -rf… │
+│ ○ docs              claude │
+│   fix the install section  │
+│ ○ dots               shell │
 └────────────────────────────┘
 ```
 

@@ -81,8 +81,8 @@ latest_version() {
 	tag=$(fetch "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
 		sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 	[ -n "$tag" ] || die "no published release found for $REPO.
-Install from source instead:
-  go install github.com/$REPO@latest"
+Build from source instead:
+  git clone https://github.com/$REPO && cd berth && make install"
 	echo "$tag"
 }
 
@@ -128,7 +128,7 @@ step "Downloading"
 fetch_to "$BASE/$ARCHIVE" "$tmp/$ARCHIVE" 2>/dev/null ||
 	die "no build for ${OS}/${ARCH} in $VERSION.
 Build from source instead:
-  go install github.com/$REPO@latest"
+  git clone https://github.com/$REPO && cd berth && make install"
 ok "$ARCHIVE"
 
 step "Verifying"

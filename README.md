@@ -2,7 +2,6 @@
 
 [![tests](https://github.com/dpws/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/dpws/berth/actions/workflows/ci.yml)
 [![release](https://github.com/dpws/berth/actions/workflows/release.yml/badge.svg)](https://github.com/dpws/berth/actions/workflows/release.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/dpws/berth.svg)](https://pkg.go.dev/github.com/dpws/berth)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A terminal UI for juggling Claude Code, Codex and plain shell sessions. tmux
@@ -42,12 +41,6 @@ paste a screenshot from this one:
 
 ```powershell
 irm https://raw.githubusercontent.com/dpws/berth/main/install.ps1 | iex
-```
-
-**Go**
-
-```sh
-go install github.com/dpws/berth@latest
 ```
 
 The shell installer takes `VERSION`, `BERTH_INSTALL_DIR`, `BERTH_CLIPD=1` to

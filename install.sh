@@ -133,12 +133,17 @@ ok "$ARCHIVE"
 
 step "Verifying"
 if fetch_to "$BASE/checksums.txt" "$tmp/checksums.txt" 2>/dev/null; then
-	want=$(grep " $ARCHIVE\$" "$tmp/checksums.txt" | cut -d' ' -f1)
+	# sha256sum may write names with a leading "./", so compare basenames
+	# rather than whole fields.
+	want=$(awk -v want="$ARCHIVE" '
+		{ name = $2; sub(/^\.\//, "", name); if (name == want) { print $1; exit } }
+	' "$tmp/checksums.txt")
 	got=$(sha256_of "$tmp/$ARCHIVE")
 	if [ -z "$got" ]; then
 		warn "no sha256 tool found, skipping checksum"
 	elif [ -z "$want" ]; then
-		warn "$ARCHIVE is not listed in checksums.txt"
+		die "$ARCHIVE is not listed in checksums.txt.
+The download cannot be verified, so it is not being installed."
 	elif [ "$want" != "$got" ]; then
 		die "checksum mismatch for $ARCHIVE
   expected $want

@@ -81,7 +81,10 @@ jobs:
             rm -rf "$work"
           done
 
-          cd dist && sha256sum ./* > checksums.txt && cat checksums.txt
+          # Name the archives explicitly: a "./*" glob writes "./" prefixes and
+          # would also try to hash checksums.txt itself.
+          cd dist && sha256sum berth_*.tar.gz berth-clipd_*.zip > checksums.txt
+          cat dist/checksums.txt
 
       - name: Publish
         env:

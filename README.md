@@ -3,6 +3,7 @@
 [![tests](https://github.com/dpws/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/dpws/berth/actions/workflows/ci.yml)
 [![release](https://github.com/dpws/berth/actions/workflows/release.yml/badge.svg)](https://github.com/dpws/berth/actions/workflows/release.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/dpws/berth.svg)](https://pkg.go.dev/github.com/dpws/berth)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A terminal UI for juggling Claude Code, Codex and plain shell sessions. tmux
 does the heavy lifting underneath; berth gives it a session list on the left
@@ -322,3 +323,7 @@ TMUX_TMPDIR=/tmp/cmux-e2e ./berth
   notices and drops back to the list.
 - Set `BERTH_LOG=/path/to/log` to trace attaches when something misbehaves —
   a TUI has nowhere else to print.
+
+## License
+
+MIT - see [LICENSE](LICENSE).

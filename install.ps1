@@ -69,11 +69,41 @@ function Write-Ok   { param([string]$Message) Write-Host "    $Message" -Foregro
 function Write-Warn { param([string]$Message) Write-Host "    $Message" -ForegroundColor Yellow }
 
 function Stop-Agent {
+    # Stop-Process only asks; Windows keeps the executable locked until the
+    # process has actually gone, and an install that copied straight after
+    # would fail with "being used by another process".
     Get-Process -Name "berth-clipd", "berth-clipd-silent" -ErrorAction SilentlyContinue |
         ForEach-Object {
             Write-Ok "stopping pid $($_.Id)"
             Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            Wait-Process -Id $_.Id -Timeout 10 -ErrorAction SilentlyContinue
         }
+}
+
+function Copy-Agent {
+    param([string]$Source, [string]$Target)
+
+    # Even once the process is gone the file can stay locked for a moment -
+    # antivirus and search indexers both do this - so a few retries turn a
+    # failed install into a slightly slower one.
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+        try {
+            Copy-Item $Source $Target -Force -ErrorAction Stop
+            return
+        } catch {
+            # Deliberately not catching [System.IO.IOException] by type:
+            # -ErrorAction Stop wraps cmdlet errors, and the wrapper does not
+            # reliably match in Windows PowerShell 5.1. The real error is
+            # carried into the final message so a genuine failure - no
+            # permission, no disk - is not disguised as a lock.
+            if ($attempt -eq 10) {
+                throw "could not write $Target after several attempts: " +
+                      "$($_.Exception.Message) If berth-clipd is still " +
+                      "running, close it and run this again."
+            }
+            Start-Sleep -Milliseconds 300
+        }
+    }
 }
 
 if ($Uninstall) {
@@ -184,7 +214,7 @@ as clip_agent_token in berth's config.
     Stop-Agent
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     $target = Join-Path $InstallDir $exeName
-    Copy-Item $Source $target -Force
+    Copy-Agent -Source $Source -Target $target
     Write-Ok "installed $target"
 
     $agentArgs = "-addr $Address`:$Port"

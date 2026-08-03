@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
@@ -92,8 +93,8 @@ func TestSidebarAndTerminalFillTheScreen(t *testing.T) {
 	if sideW+1+termW != 100 {
 		t.Fatalf("columns do not add up: %d + 1 + %d != 100", sideW, termW)
 	}
-	if termH != 29 {
-		t.Fatalf("terminal height should leave one row for the footer, got %d", termH)
+	if termH != 28 {
+		t.Fatalf("terminal height should leave the rule and the hotkeys room, got %d", termH)
 	}
 
 	lines := m.sidebarLines(sideW, m.bodyHeight())
@@ -639,5 +640,45 @@ func TestOnlyOneFadeChainRuns(t *testing.T) {
 	}
 	if cmd := m.statusCmd(); cmd != nil {
 		t.Error("a second redraw chain started while one was already running")
+	}
+}
+
+// The footer must never be wider than the screen: it wraps if it is, and a
+// wrapped footer pushes the whole frame up off the top.
+func TestFooterNeverOverflows(t *testing.T) {
+	for _, w := range []int{200, 100, 80, 64, 40, 20, 10} {
+		m := newTestModel()
+		m.Update(tea.WindowSizeMsg{Width: w, Height: 20})
+		m.Update(sessions("a-session-with-a-long-name"))
+
+		for _, focus := range []focusArea{focusSidebar, focusTerminal} {
+			m.focus = focus
+			if got := ansi.StringWidth(m.footerView()); got != w {
+				t.Errorf("width %d focus %v: footer is %d cells", w, focus, got)
+			}
+		}
+
+		m.setStatus(strings.Repeat("a long message that will not fit ", 8), true)
+		if got := ansi.StringWidth(m.footerView()); got != w {
+			t.Errorf("width %d: a long status made the footer %d cells", w, got)
+		}
+	}
+}
+
+// Every row of the frame has to be exactly the width of the screen, or the
+// terminal wraps one and the layout slides.
+func TestFrameRowsAreExactlyTheScreenWidth(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 72, Height: 14})
+	m.Update(sessions("alpha", "bravo"))
+
+	rows := strings.Split(m.View(), "\n")
+	if len(rows) != 14 {
+		t.Fatalf("frame is %d rows, want 14", len(rows))
+	}
+	for i, r := range rows {
+		if got := ansi.StringWidth(r); got != 72 {
+			t.Errorf("row %d is %d cells wide: %q", i, got, ansi.Strip(r))
+		}
 	}
 }

@@ -1307,7 +1307,9 @@ func (m *Model) sidebarWidth() int {
 	return w
 }
 
-func (m *Model) bodyHeight() int { return max(1, m.height-1) }
+// bodyHeight is the room left for the sidebar and the terminal once the rule
+// and the hotkey line beneath them are taken out.
+func (m *Model) bodyHeight() int { return max(1, m.height-2) }
 
 func (m *Model) terminalSize() (int, int) {
 	return max(2, m.width-m.sidebarWidth()-1), m.bodyHeight()
@@ -1361,6 +1363,8 @@ func (m *Model) View() string {
 		}
 	}
 	b.WriteByte('\n')
+	b.WriteString(m.footerRule(sideW))
+	b.WriteByte('\n')
 	b.WriteString(m.footerView())
 	return b.String()
 }
@@ -1399,6 +1403,27 @@ func (m *Model) terminalLines(w, h int) []string {
 	return out
 }
 
+// footerRule closes the two columns off above the hotkeys, meeting the divider
+// between them so the corner reads as one drawing rather than two lines that
+// happen to cross.
+func (m *Model) footerRule(sideW int) string {
+	if m.width <= 0 {
+		return ""
+	}
+	if sideW <= 0 || sideW >= m.width {
+		return dividerStyle.Render(strings.Repeat("─", m.width))
+	}
+	left := strings.Repeat("─", sideW)
+	right := strings.Repeat("─", max(0, m.width-sideW-1))
+	if m.focus == focusTerminal {
+		// The divider above it is lit while the session has the keyboard, and
+		// the corner it lands on should not be left behind.
+		return dividerStyle.Render(left) + focusedDivStyle.Render("┴") +
+			dividerStyle.Render(right)
+	}
+	return dividerStyle.Render(left + "┴" + right)
+}
+
 func (m *Model) footerView() string {
 	var help string
 	switch {
@@ -1407,15 +1432,19 @@ func (m *Model) footerView() string {
 		if m.pane != nil {
 			name = m.pane.Session
 		}
-		help = footerKeyStyle.Render("ctrl+o") + footerStyle.Render(" back to list")
+		// Say what happens to everything that is not listed, since while a
+		// session has the keyboard that is nearly every key there is.
+		pairs := []string{"ctrl+o", "back to the list"}
 		if m.cfg.QuitKey != "" {
-			// The only quit reachable without leaving the session first.
-			help += footerStyle.Render("  ·  ") +
-				footerKeyStyle.Render(m.cfg.QuitKey) + footerStyle.Render(" quit")
+			pairs = append(pairs, m.cfg.QuitKey, "quit")
 		}
-		help += footerStyle.Render("  ·  keys go to ") + footerKeyStyle.Render(name)
+		pairs = append(pairs, m.cfg.PasteImageKey, "image")
+		help = joinHelpWidth(max(0, m.width-2), pairs...) +
+			footerStyle.Render("  ·  everything else typed goes to ") +
+			footerKeyStyle.Render(name)
 	default:
-		help = joinHelp(
+		// One cell each side keeps the hints off the edge of the screen.
+		help = joinHelpWidth(max(0, m.width-2),
 			"↑/↓", "move",
 			"enter", "terminal",
 			"n", "new",
@@ -1436,17 +1465,36 @@ func (m *Model) footerView() string {
 			color = colDanger
 		}
 		style := lipgloss.NewStyle().Foreground(fadeColor(color, m.statusLife()))
-		help = style.Render(truncate(m.status, m.width))
+		help = style.Render(m.status)
 	}
-	return padTo(help, m.width)
+	// A leading space lines the hotkeys up with the sidebar's own rows, and
+	// the whole line is cut to the screen: an overlong footer wraps, and a
+	// wrapped footer pushes the rest of the frame up off the top.
+	return padTo(truncate(" "+help, m.width), m.width)
 }
 
 func joinHelp(pairs ...string) string {
-	var parts []string
+	return joinHelpWidth(0, pairs...)
+}
+
+// joinHelpWidth renders as many key hints as fit in w cells, dropping whole
+// hints off the end rather than letting the line wrap or be cut mid-word. A
+// width of zero means no limit.
+func joinHelpWidth(w int, pairs ...string) string {
+	out, used := "", 0
 	for i := 0; i+1 < len(pairs); i += 2 {
-		parts = append(parts, footerKeyStyle.Render(pairs[i])+" "+footerStyle.Render(pairs[i+1]))
+		hint := footerKeyStyle.Render(pairs[i]) + " " + footerStyle.Render(pairs[i+1])
+		sep := ""
+		if out != "" {
+			sep = footerStyle.Render(" · ")
+		}
+		if w > 0 && used+lipgloss.Width(sep)+lipgloss.Width(hint) > w {
+			break
+		}
+		out += sep + hint
+		used += lipgloss.Width(sep) + lipgloss.Width(hint)
 	}
-	return strings.Join(parts, footerStyle.Render(" · "))
+	return out
 }
 
 func (m *Model) dialogView() string {

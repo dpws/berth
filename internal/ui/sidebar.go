@@ -35,7 +35,13 @@ func (m *Model) sidebarLines(w, h int) []string {
 	// Reserve the last two rows for the legend, plus whatever the usage block
 	// needs above it. Both are dropped first when the window is too short.
 	usage := m.usageBlock(w, h-len(lines)-2)
-	reserved := 2 + len(usage)
+	// A blank row below the block keeps its rule and the legend's from closing
+	// in on it.
+	spacer := 0
+	if len(usage) > 0 {
+		spacer = 1
+	}
+	reserved := 2 + len(usage) + spacer
 	listHeight := h - len(lines) - reserved
 	visible := m.visibleSessions()
 
@@ -65,6 +71,10 @@ func (m *Model) sidebarLines(w, h int) []string {
 	}
 	for _, line := range usage {
 		lines = append(lines, pad.Render(line))
+		blank()
+	}
+	for i := 0; i < spacer; i++ {
+		lines = append(lines, pad.Render(""))
 		blank()
 	}
 	if h >= 2 {
@@ -206,7 +216,7 @@ func (m *Model) statusDot(s tmux.Session) (string, lipgloss.TerminalColor) {
 
 func (m *Model) sidebarLegend() string {
 	if m.focus == focusTerminal {
-		return footerStyle.Render("terminal has keys")
+		return footerStyle.Render("typing goes to the session")
 	}
 	return footerStyle.Render("n new  x kill  ? help")
 }

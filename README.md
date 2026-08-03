@@ -22,7 +22,7 @@ again, still running when you come back.
 │──────────────────│                                     │
 │ 5h  ▓▓▓░░░  28%  │                                     │
 └──────────────────┴─────────────────────────────────────┘
- ctrl+o back to list  ·  keys go to api
+ ctrl+o back to the list · ctrl+x quit  ·  everything else typed goes to api
 ```
 
 Quit berth and every session keeps running — they are ordinary tmux

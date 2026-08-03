@@ -56,9 +56,7 @@ func (w *codexWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 			continue
 		}
 		dir := filepath.Clean(r.cwd)
-		// Several rollouts can share a directory; the one written last is the
-		// session still in front of you.
-		if prev, ok := byDir[dir]; !ok || r.updated.After(prev.updated) {
+		if prev, ok := byDir[dir]; !ok || better(r, prev) {
 			byDir[dir] = r
 		}
 	}
@@ -81,6 +79,20 @@ func (w *codexWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 		}
 		out[s.Name] = Info{Status: status, Task: r.task, Updated: r.updated}
 	}
+}
+
+// better reports whether a is the rollout to believe about a directory.
+//
+// Recency alone is not enough. Codex leaves rollouts that never receive a
+// prompt - a dozen of them can pile up in one directory - and they are written
+// to, so one of those can be the newest file while the session you are looking
+// at is the one with something to say. Picking by recency made the task under
+// a session flicker away and back as the two took turns being newest.
+func better(a, b *rollout) bool {
+	if (a.task != "") != (b.task != "") {
+		return a.task != ""
+	}
+	return a.updated.After(b.updated)
 }
 
 // read follows one rollout, returning what is known about it.

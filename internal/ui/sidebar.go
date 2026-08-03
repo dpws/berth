@@ -158,15 +158,22 @@ func cursorRow(rows []listRow, cursor int) int {
 }
 
 // taskLine renders what the agent was last asked to do, indented under its
-// session. It returns "" when there is nothing to say.
+// session. It returns "" for a session that will never have one.
+//
+// An agent session keeps its row even when there is nothing to put in it. The
+// row appearing and disappearing moves every session below it, which is a lot
+// of movement to report that berth briefly does not know what something is
+// working on.
 func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
 	if m.cfg.HideTask {
 		return ""
 	}
-	info, ok := m.agents[s.Name]
-	if !ok {
+	kind := sessionKind(s)
+	if kind != tmux.KindClaude && kind != tmux.KindCodex {
 		return ""
 	}
+
+	info := m.agents[s.Name]
 	text := info.Task
 	if info.Status.NeedsInput() && info.Detail != "" {
 		// What it is waiting for beats what it was asked - that is the thing
@@ -174,7 +181,11 @@ func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
 		text = info.Detail
 	}
 	if text == "" {
-		return ""
+		// A blank row, not no row: the space is held so nothing below it moves.
+		if selected {
+			return itemSelectedStyle.Render(padTo("", w))
+		}
+		return strings.Repeat(" ", max(1, w))
 	}
 
 	// Indented to sit under the name rather than the status glyph.

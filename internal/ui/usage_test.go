@@ -219,21 +219,36 @@ func TestTaskLinePrefersWhatItIsWaitingFor(t *testing.T) {
 	}
 }
 
-func TestTaskLineHiddenWhenThereIsNothingToSay(t *testing.T) {
+// A shell will never have a task, so it gets no row. An agent keeps its row
+// even when empty: a row that comes and goes moves every session below it,
+// which is a lot of movement to say berth does not know something yet.
+func TestTaskRowIsHeldForAgentsAndNotForShells(t *testing.T) {
 	m := newTestModel()
-	s := tmux.Session{Name: "dots", Kind: tmux.KindShell}
-	if got := m.taskLine(s, false, 40); got != "" {
-		t.Errorf("a session with no agent drew %q", got)
+
+	shell := tmux.Session{Name: "dots", Kind: tmux.KindShell}
+	if got := m.taskLine(shell, false, 40); got != "" {
+		t.Errorf("a shell drew a task row: %q", got)
 	}
 
-	withAgents(m, map[string]agent.Info{"dots": {Status: agent.Idle}})
-	if got := m.taskLine(s, false, 40); got != "" {
-		t.Errorf("an agent with no task drew %q", got)
+	agentSession := tmux.Session{Name: "api", Kind: tmux.KindClaude}
+	for _, info := range []map[string]agent.Info{
+		nil, // nothing known yet
+		{"api": {Status: agent.Idle}},
+		{"api": {Status: agent.Busy}},
+	} {
+		withAgents(m, info)
+		got := m.taskLine(agentSession, false, 40)
+		if got == "" {
+			t.Errorf("an agent with no task drew no row at all (%v)", info)
+		}
+		if strings.TrimSpace(ansi.Strip(got)) != "" {
+			t.Errorf("an agent with no task drew %q, want it blank", got)
+		}
 	}
 
 	m.cfg.HideTask = true
-	withAgents(m, map[string]agent.Info{"dots": {Status: agent.Busy, Task: "something"}})
-	if got := m.taskLine(s, false, 40); got != "" {
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy, Task: "something"}})
+	if got := m.taskLine(agentSession, false, 40); got != "" {
 		t.Errorf("hide_task still drew %q", got)
 	}
 }

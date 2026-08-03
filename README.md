@@ -304,8 +304,13 @@ for the pane, so the match is exact rather than guessed. Its own vocabulary is
 says what it is waiting for, that replaces the task on the second line. Codex
 records `task_started` and `task_complete` in its session rollout, which gives
 working-or-not honestly, but it logs no pid — so berth matches it by working
-directory, and two Codex sessions in the same directory can be confused for
-each other.
+directory. Codex also leaves rollouts that never receive a prompt and keeps
+writing to them, so berth prefers a rollout that has one over one that is
+merely newer; two Codex sessions genuinely in use in the same directory can
+still be confused for each other.
+
+An agent session keeps its task row even when berth has nothing to put in it,
+so the sessions below do not move every time it learns or forgets something.
 
 **The task is the last thing you asked**, not the session's title. Both agents
 also record a title, but it is written once from the opening request and never

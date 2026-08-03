@@ -220,3 +220,48 @@ func TestStatusPredicates(t *testing.T) {
 		t.Error("Active should be true only while the agent is doing work")
 	}
 }
+
+// Codex leaves rollouts that never receive a prompt, and writes to them. A
+// directory can hold a dozen; picking the most recent made the task under a
+// session flicker away and back as an empty rollout took its turn at being
+// newest.
+func TestCodexPrefersTheRolloutWithAPrompt(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "real.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work"}}`+"\n"+
+			codexEvent("2026-08-03T10:00:00Z", `{"type":"user_message","message":"the actual task"}`)+"\n")
+	// Written later, but with nothing to say.
+	empty := filepath.Join(root, "empty.jsonl")
+	writeFile(t, empty, `{"type":"session_meta","payload":{"cwd":"/work"}}`+"\n"+
+		codexEvent("2026-08-03T11:00:00Z", `{"type":"token_count"}`)+"\n")
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(empty, later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	out := map[string]Info{}
+	newCodexWatcher(root).refresh([]tmux.Session{{Name: "web", Dir: "/work"}}, out)
+
+	if got := out["web"].Task; got != "the actual task" {
+		t.Errorf("Task = %q, want the rollout that has one", got)
+	}
+}
+
+// Between two rollouts that both have a prompt, the newer one wins - that is
+// the session you are actually looking at.
+func TestCodexPrefersTheNewerOfTwoRealRollouts(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "old.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work"}}`+"\n"+
+			codexEvent("2026-08-03T09:00:00Z", `{"type":"user_message","message":"yesterday"}`)+"\n")
+	writeFile(t, filepath.Join(root, "new.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work"}}`+"\n"+
+			codexEvent("2026-08-03T12:00:00Z", `{"type":"user_message","message":"today"}`)+"\n")
+
+	out := map[string]Info{}
+	newCodexWatcher(root).refresh([]tmux.Session{{Name: "web", Dir: "/work"}}, out)
+
+	if got := out["web"].Task; got != "today" {
+		t.Errorf("Task = %q, want the newer prompt", got)
+	}
+}

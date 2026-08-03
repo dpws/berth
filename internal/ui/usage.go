@@ -13,9 +13,12 @@ import (
 // A usage meter takes whatever the row can spare between its label and its
 // percentage, so a wider sidebar buys a longer bar rather than more blank.
 const (
+	// labelMax is the widest a row label may be. Windows are "5h" and "week",
+	// but Codex meters some models separately and names those buckets.
+	labelMax = 9
 	// barFixed is what the rest of the row costs: a leading space, the label,
 	// a space, two of gap, and "100%".
-	barFixed = 1 + 4 + 1 + 2 + 4
+	barFixed = 1 + labelMax + 1 + 2 + 4
 	// barMin is the shortest meter worth drawing; below it the number alone
 	// says more than six characters of block glyph.
 	barMin = 6
@@ -25,8 +28,8 @@ const (
 
 // barWidthFor is how many cells the meter gets in a row w cells wide, or 0
 // when there is not enough room for one.
-func barWidthFor(w int) int {
-	n := w - barFixed
+func barWidthFor(w, labelW int) int {
+	n := w - (barFixed - labelMax + labelW)
 	if n > barMax {
 		n = barMax
 	}
@@ -86,9 +89,20 @@ func usageRows(l usage.Limits, kind string, w int) []string {
 		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}
 	}
 
+	// One label column for the block, as wide as its widest row needs.
+	labelW := 2
+	for _, win := range l.Windows {
+		if n := lipgloss.Width(win.Label); n > labelW {
+			labelW = n
+		}
+	}
+	if labelW > labelMax {
+		labelW = labelMax
+	}
+
 	rows := make([]string, 0, len(l.Windows)+1)
 	for _, win := range l.Windows {
-		rows = append(rows, usageRow(win, kind, w))
+		rows = append(rows, usageRow(win, kind, w, labelW))
 	}
 	if note := usageNote(l, w); note != "" {
 		rows = append(rows, note)
@@ -100,8 +114,7 @@ func usageRows(l usage.Limits, kind string, w int) []string {
 // The meter is dropped when there is no room for it, and when the source gives
 // tokens rather than a percentage, since there is then no ceiling to measure
 // them against.
-func usageRow(win usage.Window, kind string, w int) string {
-	const labelW = 4
+func usageRow(win usage.Window, kind string, w int, labelW int) string {
 	label := footerStyle.Render(padTo(truncate(win.Label, labelW), labelW))
 
 	// row lays out " " + label + [" " + bar] + gap + value, right-aligned.
@@ -121,7 +134,7 @@ func usageRow(win usage.Window, kind string, w int) string {
 
 	value := fmt.Sprintf("%3.0f%%", win.Percent)
 	styled := itemStyle.Render(value)
-	if bar := barWidthFor(w); bar > 0 {
+	if bar := barWidthFor(w, labelW); bar > 0 {
 		if out, ok := row(usageBar(win.Percent, kind, bar), value, styled); ok {
 			return out
 		}

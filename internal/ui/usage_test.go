@@ -45,9 +45,13 @@ func TestBarWidthFollowsTheSidebar(t *testing.T) {
 		200: barMax,
 	}
 	for w, want := range cases {
-		if got := barWidthFor(w); got != want {
+		if got := barWidthFor(w, 4); got != want {
 			t.Errorf("barWidthFor(%d) = %d, want %d", w, got, want)
 		}
+	}
+	// A wider label leaves the meter less room, not the row more width.
+	if barWidthFor(28, 9) >= barWidthFor(28, 4) {
+		t.Error("a longer label did not take room from the meter")
 	}
 }
 
@@ -58,7 +62,7 @@ func TestUsageRowFitsTheColumn(t *testing.T) {
 	}
 	for _, w := range windows {
 		for _, width := range []int{16, 20, 28, 40} {
-			got := usageRow(w, tmux.KindClaude, width)
+			got := usageRow(w, tmux.KindClaude, width, 4)
 			if ansi.StringWidth(got) > width {
 				t.Errorf("usageRow(%q, w=%d) is %d cells, want at most %d: %q",
 					w.Label, width, ansi.StringWidth(got), width, ansi.Strip(got))

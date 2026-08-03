@@ -177,3 +177,91 @@ func TestReadCodexDirEmpty(t *testing.T) {
 		t.Error("want an error for a directory with no sessions")
 	}
 }
+
+// codexLine with a bucket id, for the case Codex meters a model separately.
+func codexBucketLine(ts, id, name string, percent float64, minutes int, resets int64) string {
+	return fmt.Sprintf(
+		`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count",`+
+			`"rate_limits":{"limit_id":%q,"limit_name":%s,`+
+			`"primary":{"used_percent":%v,"window_minutes":%d,"resets_at":%d},`+
+			`"secondary":null,"plan_type":"prolite"}}}`,
+		ts, id, nullableString(name), percent, minutes, resets)
+}
+
+func nullableString(s string) string {
+	if s == "" {
+		return "null"
+	}
+	return fmt.Sprintf("%q", s)
+}
+
+// Codex meters some models separately. Keeping only the newest snapshot meant
+// a freshly touched bucket at nothing used hid a main quota most of the way
+// gone - the meter read empty while the real limit was well spent.
+func TestReadCodexDirKeepsEveryBucket(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "r.jsonl"),
+		codexBucketLine("2026-08-03T10:00:00Z", "codex", "", 34, 10080, 1786184122)+"\n"+
+			codexBucketLine("2026-08-03T11:00:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark", 0, 10080, 1786399909)+"\n")
+
+	got, err := readCodexDir(dir)
+	if err != nil {
+		t.Fatalf("readCodexDir: %v", err)
+	}
+	if len(got.Windows) != 2 {
+		t.Fatalf("got %d windows, want both buckets: %+v", len(got.Windows), got.Windows)
+	}
+	// The plain bucket leads: it is the one most people mean.
+	if got.Windows[0].Label != "codex" || got.Windows[0].Percent != 34 {
+		t.Errorf("first window = %+v, want the main quota", got.Windows[0])
+	}
+	if got.Windows[1].Label != "spark" || got.Windows[1].Percent != 0 {
+		t.Errorf("second window = %+v, want the named bucket", got.Windows[1])
+	}
+}
+
+// With one bucket there is nothing to tell apart, so the window keeps its own
+// name rather than being labelled with the limit's.
+func TestOneBucketIsLabelledByItsWindow(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "r.jsonl"),
+		codexBucketLine("2026-08-03T10:00:00Z", "codex", "", 28, 10080, 1786184122)+"\n")
+
+	got, err := readCodexDir(dir)
+	if err != nil {
+		t.Fatalf("readCodexDir: %v", err)
+	}
+	if len(got.Windows) != 1 || got.Windows[0].Label != "week" {
+		t.Errorf("windows = %+v, want one labelled by its window", got.Windows)
+	}
+}
+
+// A bucket's newest reading wins, wherever it was found.
+func TestBucketsTakeTheirNewestReading(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "old.jsonl"),
+		codexBucketLine("2026-08-03T09:00:00Z", "codex", "", 10, 10080, 1786184122)+"\n")
+	writeFile(t, filepath.Join(dir, "new.jsonl"),
+		codexBucketLine("2026-08-03T12:00:00Z", "codex", "", 55, 10080, 1786184122)+"\n")
+
+	got, err := readCodexDir(dir)
+	if err != nil {
+		t.Fatalf("readCodexDir: %v", err)
+	}
+	if len(got.Windows) != 1 || got.Windows[0].Percent != 55 {
+		t.Errorf("windows = %+v, want the newer reading", got.Windows)
+	}
+}
+
+func TestCodexLimitLabel(t *testing.T) {
+	cases := map[[2]string]string{
+		{"codex_bengalfox", "GPT-5.3-Codex-Spark"}: "spark",
+		{"codex_bengalfox", ""}:                    "bengalfox",
+		{"codex", ""}:                              "codex",
+	}
+	for in, want := range cases {
+		if got := codexLimitLabel(in[0], in[1]); got != want {
+			t.Errorf("codexLimitLabel(%q, %q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}

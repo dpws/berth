@@ -18,10 +18,11 @@ import (
 // logs, once per turn alongside the token counts. The newest snapshot is
 // therefore whatever the most recently written rollout file ends with.
 const (
-	// codexScanFiles bounds how many rollout files we open looking for a
-	// snapshot. One is almost always enough; a handful covers the case where
-	// the newest session has not made a request yet.
-	codexScanFiles = 4
+	// codexScanFiles bounds how many rollout files we open looking for
+	// snapshots. Codex leaves rollouts that never make a request, and a dozen
+	// can pile up in a day, so a handful is not enough to be sure of finding
+	// the session that did.
+	codexScanFiles = 16
 	// codexMaxLine is the scanner buffer. Rollout lines carry whole messages,
 	// so they can be far longer than bufio's default 64 KiB.
 	codexMaxLine = 8 << 20
@@ -40,6 +41,10 @@ type codexRollout struct {
 }
 
 type codexRateLimits struct {
+	// LimitID names the bucket. Codex meters some models separately, so a
+	// session that switches model starts reporting against a different one.
+	LimitID   string       `json:"limit_id"`
+	LimitName string       `json:"limit_name"`
 	Primary   *codexWindow `json:"primary"`
 	Secondary *codexWindow `json:"secondary"`
 	PlanType  string       `json:"plan_type"`
@@ -61,6 +66,11 @@ func readCodex() (Limits, error) {
 }
 
 // readCodexDir is readCodex against an explicit sessions directory.
+//
+// Every bucket is kept, not just the last one written. Codex meters some
+// models separately, so a session that switches model starts reporting against
+// a different limit - and showing only the newest snapshot meant a freshly
+// touched bucket at nothing used hid a main quota most of the way gone.
 func readCodexDir(dir string) (Limits, error) {
 	files, err := newestFiles(dir, ".jsonl", codexScanFiles)
 	if err != nil {
@@ -70,20 +80,85 @@ func readCodexDir(dir string) (Limits, error) {
 		return Limits{}, errors.New("no codex sessions yet")
 	}
 
+	newest := map[string]codexSnapshot{}
 	for _, path := range files {
-		limits, ok := readCodexFile(path)
-		if ok {
-			return limits, nil
+		for id, snap := range readCodexFile(path) {
+			if prev, ok := newest[id]; !ok || snap.at.After(prev.at) {
+				newest[id] = snap
+			}
 		}
 	}
-	return Limits{}, errors.New("no rate limits recorded yet")
+	if len(newest) == 0 {
+		return Limits{}, errors.New("no rate limits recorded yet")
+	}
+	return codexLimits(newest), nil
 }
 
-// readCodexFile returns the last snapshot in one rollout file.
-func readCodexFile(path string) (Limits, bool) {
+// codexSnapshot is one bucket's most recent reading.
+type codexSnapshot struct {
+	at      time.Time
+	limits  codexRateLimits
+	windows []*codexWindow
+}
+
+// codexLimits turns the buckets into what the sidebar draws, plainest first so
+// the main quota leads.
+func codexLimits(byID map[string]codexSnapshot) Limits {
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := ids[i], ids[j]
+		// The unadorned "codex" bucket is the one most people mean.
+		if (a == "codex") != (b == "codex") {
+			return a == "codex"
+		}
+		return a < b
+	})
+
+	out := Limits{}
+	named := len(byID) > 1
+	for _, id := range ids {
+		snap := byID[id]
+		if out.Plan == "" {
+			out.Plan = snap.limits.PlanType
+		}
+		if snap.at.After(out.Sampled) {
+			out.Sampled = snap.at
+		}
+		for _, w := range snap.windows {
+			label := windowLabel(w.WindowMinutes)
+			if named {
+				// With more than one bucket in play, "week" twice says
+				// nothing; the bucket is what tells them apart.
+				label = codexLimitLabel(id, snap.limits.LimitName)
+			}
+			out.Windows = append(out.Windows, Window{
+				Label:    label,
+				Percent:  w.UsedPercent,
+				ResetsAt: unixOrZero(w.ResetsAt),
+			})
+		}
+	}
+	return out
+}
+
+// codexLimitLabel shortens a bucket to something a sidebar can hold. The
+// published name is friendlier than the id when there is one.
+func codexLimitLabel(id, name string) string {
+	if name != "" {
+		parts := strings.Split(name, "-")
+		return strings.ToLower(parts[len(parts)-1])
+	}
+	return strings.ToLower(strings.TrimPrefix(id, "codex_"))
+}
+
+// readCodexFile returns the last snapshot per bucket in one rollout file.
+func readCodexFile(path string) map[string]codexSnapshot {
 	f, err := os.Open(path)
 	if err != nil {
-		return Limits{}, false
+		return nil
 	}
 	defer f.Close()
 
@@ -95,28 +170,25 @@ func readCodexFile(path string) (Limits, bool) {
 			r := bufio.NewReaderSize(f, 64*1024)
 			// The seek lands mid-line; drop the remainder of it.
 			if _, err := r.ReadString('\n'); err == nil {
-				if limits, ok := scanCodexLines(r); ok {
-					return limits, true
+				if found := scanCodexLines(r); len(found) > 0 {
+					return found
 				}
 			}
 		}
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return Limits{}, false
+			return nil
 		}
 	}
 	return scanCodexLines(f)
 }
 
-// scanCodexLines returns the last snapshot in a stream of rollout lines.
-func scanCodexLines(r io.Reader) (Limits, bool) {
+// scanCodexLines returns the last snapshot per bucket in a stream of lines.
+func scanCodexLines(r io.Reader) map[string]codexSnapshot {
 	needle := []byte(`"rate_limits"`)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), codexMaxLine)
 
-	var (
-		found  Limits
-		haveIt bool
-	)
+	found := map[string]codexSnapshot{}
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if !bytes.Contains(line, needle) {
@@ -146,17 +218,15 @@ func scanCodexLines(r io.Reader) (Limits, bool) {
 			return windows[i].WindowMinutes < windows[j].WindowMinutes
 		})
 
-		limits := Limits{Plan: rl.PlanType, Sampled: rec.Timestamp}
-		for _, w := range windows {
-			limits.Windows = append(limits.Windows, Window{
-				Label:    windowLabel(w.WindowMinutes),
-				Percent:  w.UsedPercent,
-				ResetsAt: unixOrZero(w.ResetsAt),
-			})
+		id := rl.LimitID
+		if id == "" {
+			id = "codex"
 		}
-		found, haveIt = limits, true
+		if prev, ok := found[id]; !ok || !rec.Timestamp.Before(prev.at) {
+			found[id] = codexSnapshot{at: rec.Timestamp, limits: *rl, windows: windows}
+		}
 	}
-	return found, haveIt
+	return found
 }
 
 // newestFiles returns up to n paths under root with the given extension, most

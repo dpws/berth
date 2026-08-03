@@ -382,9 +382,19 @@ you are looking at.**
 
 **Codex** numbers are exact. The Codex CLI records the server's own answer —
 percentage used, window length, reset time — in its session logs at
-`~/.codex/sessions`, and berth reads the most recent one. Whatever your plan
-reports is what you see, whether that is a 5-hour window, a weekly one, or
-both.
+`~/.codex/sessions`, and berth reads them. Whatever your plan reports is what
+you see, whether that is a 5-hour window, a weekly one, or both.
+
+Codex meters some models against separate buckets, so a session that switches
+model starts reporting against a different limit. berth keeps every bucket and
+labels each by its limit rather than showing only whichever was written last —
+a bucket you have barely touched is otherwise the newest thing on disk, and
+reads as an empty meter while your real quota is most of the way gone:
+
+```
+ codex ▓▓▓▓▓░░░░░░░░░   34%
+ spark ░░░░░░░░░░░░░░    0%
+```
 
 **Claude** needs one thing wired up first, and then it is exact too.
 

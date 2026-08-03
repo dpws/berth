@@ -124,7 +124,10 @@ func codexLimits(byID map[string]codexSnapshot) Limits {
 		if out.Plan == "" {
 			out.Plan = snap.limits.PlanType
 		}
-		if snap.at.After(out.Sampled) {
+		// The oldest reading on show, not the newest. A bucket the current
+		// model reports against is written every few seconds and would
+		// otherwise vouch for one that stopped being written an hour ago.
+		if out.Sampled.IsZero() || snap.at.Before(out.Sampled) {
 			out.Sampled = snap.at
 		}
 		for _, w := range snap.windows {

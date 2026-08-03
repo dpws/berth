@@ -265,3 +265,23 @@ func TestCodexLimitLabel(t *testing.T) {
 		}
 	}
 }
+
+// One bucket is written every few seconds while another goes untouched for
+// hours. Taking the newest reading as the block's age let the busy bucket
+// vouch for the stale one, and the whole block claimed to be current.
+func TestBlockAgeIsTheOldestBucketOnShow(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "r.jsonl"),
+		codexBucketLine("2026-08-03T20:00:00Z", "codex", "", 34, 10080, 1786184122)+"\n"+
+			codexBucketLine("2026-08-03T22:17:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark", 0, 10080, 1786400230)+"\n")
+
+	got, err := readCodexDir(dir)
+	if err != nil {
+		t.Fatalf("readCodexDir: %v", err)
+	}
+	want := "2026-08-03T20:00:00Z"
+	if got.Sampled.UTC().Format(time.RFC3339) != want {
+		t.Errorf("Sampled = %v, want the oldest reading (%s)",
+			got.Sampled.UTC().Format(time.RFC3339), want)
+	}
+}

@@ -170,7 +170,11 @@ The file itself is optional, at `~/.config/berth/config.json`:
 ```
 
 `session_options` are `tmux set-option` arguments applied to sessions
-berth creates — see *Tuning tmux* below. `claude_command` is what a
+berth creates — see *Tuning tmux* below. `mouse on` is there by default:
+berth forwards the wheel into the pane regardless, and without it nothing acts
+on it, so an agent that does not ask for mouse reporting — Codex does not —
+cannot be scrolled at all. With it, tmux scrolls its own scrollback for those
+and hands the wheel to agents that want it. Set it to `[]` for none. `claude_command` is what a
 "claude" session runs — point it at
 `claude --model opus` or a wrapper script if you like. `hide_status_bar` turns
 tmux's status line off in sessions berth creates, since the sidebar already

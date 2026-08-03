@@ -38,8 +38,14 @@ type Config struct {
 	// outer terminal its native text selection back.
 	Mouse bool `json:"mouse"`
 	// SessionOptions are tmux "set-option" arguments applied to sessions
-	// berth creates, for example ["mouse on"]. Sessions started elsewhere
-	// are never touched, and server-wide options belong in ~/.tmux.conf.
+	// berth creates. Sessions started elsewhere are never touched, and
+	// server-wide options belong in ~/.tmux.conf.
+	//
+	// "mouse on" is there by default because berth forwards the wheel into
+	// the pane, and without it nothing downstream acts on it: an agent that
+	// does not ask for mouse reporting - Codex does not - simply cannot be
+	// scrolled. With it, tmux scrolls its own scrollback for those, and hands
+	// the wheel to agents that do want it.
 	SessionOptions []string `json:"session_options"`
 	// ImageDropDir is scanned for images when the clipboard has none. Over
 	// SSH this is the only workable source, so it is on by default.
@@ -107,6 +113,7 @@ func Default() Config {
 		PasteImageKey:      "ctrl+y",
 		QuitKey:            "ctrl+x",
 		ClipAgentURL:       "http://127.0.0.1:8377",
+		SessionOptions:     []string{"mouse on"},
 
 		CheckUpdates:        true,
 		UsageRefreshSeconds: 30,

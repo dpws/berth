@@ -75,3 +75,41 @@ func TestMissingConfigIsNotAnError(t *testing.T) {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
 }
+
+// berth forwards the wheel into the pane whether or not anything downstream
+// listens. Codex does not ask for mouse reporting, so without tmux's own mouse
+// mode its sessions cannot be scrolled at all.
+func TestNewSessionsCanBeScrolled(t *testing.T) {
+	var found bool
+	for _, opt := range Default().SessionOptions {
+		if opt == "mouse on" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("SessionOptions = %q, want tmux mouse mode among them",
+			Default().SessionOptions)
+	}
+}
+
+// The default is only for a config that does not mention the key. Someone who
+// asks for no options gets none.
+func TestSessionOptionsCanBeEmptied(t *testing.T) {
+	writeConfig(t, `{"session_options": []}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.SessionOptions) != 0 {
+		t.Errorf("SessionOptions = %q, want none", cfg.SessionOptions)
+	}
+
+	writeConfig(t, `{"sidebar_width": 30}`)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.SessionOptions) == 0 {
+		t.Error("a config that does not mention the key lost the default")
+	}
+}

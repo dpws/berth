@@ -89,6 +89,7 @@ a session, since emacs wants that key for itself.
 | `x` | kill the selected session (asks first) |
 | `r` | rename the selected session |
 | `/` | filter by name |
+| `,` | settings — edit the config without leaving berth |
 | `ctrl+y` | paste an image into the focused session |
 | drag | select text in the session, copied on release |
 | `m` | hand the mouse to your terminal entirely, and take it back |
@@ -124,7 +125,14 @@ clicking rows until you press it again; `"mouse": false` starts that way.
 
 ## Config
 
-Optional, at `~/.config/berth/config.json`:
+Press **`,`** to edit any of this from inside berth. Changes apply as you make
+them, so you can watch the sidebar resize or the meters disappear as you go;
+`ctrl+s` writes them to the file, `d` puts one setting back to its default, and
+leaving with unsaved changes says so rather than losing them quietly. Two
+settings — the tmux status bar and session options — only reach sessions
+created afterwards, and the screen says which those are.
+
+The file itself is optional, at `~/.config/berth/config.json`:
 
 ```json
 {

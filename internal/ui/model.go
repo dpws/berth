@@ -34,6 +34,7 @@ const (
 	modeConfirmKill
 	modeFilter
 	modeHelp
+	modeSettings
 )
 
 // attachDelay debounces attaching while the user scrolls the list.
@@ -75,8 +76,20 @@ type Model struct {
 
 	nameInput textinput.Model
 	dirInput  textinput.Model
-	newKind   string
-	formField int
+	// settingInput edits one config value at a time. It is separate from the
+	// others so opening settings cannot disturb a half-typed session name.
+	settingInput   textinput.Model
+	settings       []setting
+	settingsCursor int
+	// settingsEditing is true while a value is being typed rather than the
+	// list being walked.
+	settingsEditing bool
+	// settingsDirty marks changes made but not yet written to disk. They are
+	// already live: the screen edits the running config so you can see what a
+	// change does, and saving is what makes it survive a restart.
+	settingsDirty bool
+	newKind       string
+	formField     int
 
 	attachGen int
 	pending   string
@@ -143,13 +156,20 @@ func New(cfg config.Config) *Model {
 	dir.CharLimit = 512
 	dir.Prompt = ""
 
+	value := textinput.New()
+	value.CharLimit = 512
+	value.Prompt = ""
+	value.Width = settingsWidth - 24
+
 	m := &Model{
-		cfg:        cfg,
-		nameInput:  name,
-		dirInput:   dir,
-		newKind:    tmux.KindClaude,
-		appFocused: true,
-		mouseOn:    cfg.Mouse,
+		cfg:          cfg,
+		nameInput:    name,
+		dirInput:     dir,
+		settingInput: value,
+		settings:     settingsList(),
+		newKind:      tmux.KindClaude,
+		appFocused:   true,
+		mouseOn:      cfg.Mouse,
 	}
 	if !cfg.HideUsage {
 		m.usageTracker = usage.NewTracker()
@@ -456,6 +476,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case modeHelp:
 		m.mode = modeNormal
 		return nil
+	case modeSettings:
+		return m.handleSettingsKey(msg)
 	}
 
 	// Ctrl+O toggles which half of the screen owns the keyboard. Everything
@@ -708,6 +730,11 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 		m.nameInput.CursorEnd()
 		m.nameInput.Focus()
 		return textinput.Blink
+
+	case ",":
+		m.mode = modeSettings
+		m.settingsEditing = false
+		return nil
 
 	case "?":
 		m.mode = modeHelp
@@ -1158,6 +1185,8 @@ func (m *Model) View() string {
 	}
 
 	switch m.mode {
+	case modeSettings:
+		return m.settingsView()
 	case modeNew, modeRename, modeConfirmKill, modeHelp:
 		return m.dialogView()
 	}
@@ -1252,6 +1281,8 @@ func (m *Model) footerView() string {
 			"x", "kill",
 			"r", "rename",
 			"/", "filter",
+			m.cfg.PasteImageKey, "image",
+			",", "settings",
 			"?", "help",
 			"q", "quit",
 		)
@@ -1358,6 +1389,7 @@ func (m *Model) helpText() string {
 		{"x", "kill the selected session"},
 		{"r", "rename the selected session"},
 		{"/", "filter by name"},
+		{",", "settings"},
 		{m.cfg.PasteImageKey, "paste an image path into the session"},
 		{"click", "select a row; click again to focus it"},
 		{"wheel", "scroll the list, or the focused session"},

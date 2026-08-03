@@ -1767,9 +1767,16 @@ func (m *Model) newDialog() string {
 		}
 	}
 
-	tick := "[ ]"
+	// The tick has no label of its own, so the highlight has to go on the text
+	// itself - styling the empty label column showed nothing at all.
+	tick := "[ ] save as a preset"
 	if m.newSavePreset {
-		tick = "[✓]"
+		tick = "[✓] save as a preset"
+	}
+	if m.formField == fieldSavePreset {
+		tick = labelActiveStyle.Render(tick)
+	} else {
+		tick = itemMutedStyle.Render(tick)
 	}
 
 	rows := []string{
@@ -1786,10 +1793,7 @@ func (m *Model) newDialog() string {
 	if hint := m.dirHint(); hint != "" {
 		rows = append(rows, "         "+hint)
 	}
-	rows = append(rows,
-		"",
-		label(fieldSavePreset, "     ")+"  "+tick+" save as a preset",
-	)
+	rows = append(rows, "", "       "+tick)
 	return strings.Join(append(rows,
 		"",
 		footerStyle.Render("tab complete dir · ↑/↓ switch · ←/→ choose · enter create · esc cancel"),

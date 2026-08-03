@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/tmux"
 )
@@ -339,5 +340,33 @@ func TestRemovingTheLastPresetFromTheFormReturnsToIt(t *testing.T) {
 	}
 	if m.mode != modeNew {
 		t.Errorf("mode = %v, want the form back", m.mode)
+	}
+}
+
+// The tick has no label column of its own, so the highlight has to land on the
+// text. Styling the empty label showed nothing, and the row looked unreachable
+// while the cursor was sitting on it.
+func TestSavePresetRowShowsItHasTheCursor(t *testing.T) {
+	withColour(t)
+	m := presetModel(t)
+	m.Update(keyRune('n'))
+
+	row := func(field int) string {
+		m.formField = field
+		for _, line := range strings.Split(m.newDialog(), "\n") {
+			if strings.Contains(ansi.Strip(line), "save as a preset") {
+				return line
+			}
+		}
+		t.Fatal("the form has no save-as-preset row")
+		return ""
+	}
+
+	off, on := row(fieldName), row(fieldSavePreset)
+	if off == on {
+		t.Error("the row looks the same whether or not it has the cursor")
+	}
+	if !strings.Contains(on, labelActiveStyle.Render("[ ] save as a preset")) {
+		t.Error("the focused row is not drawn the way every other focused row is")
 	}
 }

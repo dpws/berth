@@ -82,8 +82,9 @@ jobs:
           done
 
           # Name the archives explicitly: a "./*" glob writes "./" prefixes and
-          # would also try to hash checksums.txt itself.
-          cd dist && sha256sum berth_*.tar.gz berth-clipd_*.zip > checksums.txt
+          # would also try to hash checksums.txt itself. The subshell keeps the
+          # cd from leaking into anything after it.
+          (cd dist && sha256sum berth_*.tar.gz berth-clipd_*.zip > checksums.txt)
           cat dist/checksums.txt
 
       - name: Publish

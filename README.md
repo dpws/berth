@@ -72,8 +72,8 @@ berth statusline     # Claude Code status line hook — see Rate limits
 
 ### Keys
 
-The list and the terminal take turns owning the keyboard. `ctrl+o` switches
-between them; while the terminal has focus **every other key goes to the
+The list and the terminal take turns owning the keyboard — the lit half of the
+rule above the hotkeys shows which one has it. `ctrl+o` switches between them; while the terminal has focus **every other key goes to the
 session**, including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix. The
 exceptions are `ctrl+y` (paste an image) and `ctrl+x` (quit), which berth keeps
 for itself so they work without going back to the list first — both are

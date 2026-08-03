@@ -9,10 +9,12 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
+	"github.com/muesli/termenv"
 )
 
 func newTestModel() *Model {
@@ -90,8 +92,9 @@ func TestSidebarAndTerminalFillTheScreen(t *testing.T) {
 
 	sideW := m.sidebarWidth()
 	termW, termH := m.terminalSize()
-	if sideW+1+termW != 100 {
-		t.Fatalf("columns do not add up: %d + 1 + %d != 100", sideW, termW)
+	if sideW+1+gutter+termW != 100 {
+		t.Fatalf("columns do not add up: %d + 1 + %d + %d != 100",
+			sideW, gutter, termW)
 	}
 	if termH != 28 {
 		t.Fatalf("terminal height should leave the rule and the hotkeys room, got %d", termH)
@@ -458,7 +461,7 @@ func withPane(t *testing.T, m *Model) {
 
 // terminalPress builds a mouse event over the terminal half of the screen.
 func terminalMouse(m *Model, x, y int, action tea.MouseAction, button tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{X: m.sidebarWidth() + 1 + x, Y: y, Action: action, Button: button}
+	return tea.MouseMsg{X: m.sidebarWidth() + 1 + gutter + x, Y: y, Action: action, Button: button}
 }
 
 // A drag over the session selects text; berth has the mouse, and the terminal
@@ -680,5 +683,76 @@ func TestFrameRowsAreExactlyTheScreenWidth(t *testing.T) {
 		if got := ansi.StringWidth(r); got != 72 {
 			t.Errorf("row %d is %d cells wide: %q", i, got, ansi.Strip(r))
 		}
+	}
+}
+
+// withColour makes lipgloss emit escape codes in a test, which it does not do
+// by default because nothing here is a terminal. Without it, assertions about
+// what is highlighted pass whether or not anything is.
+func withColour(t *testing.T) {
+	t.Helper()
+	before := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(before) })
+}
+
+// The lit half of the rule under the columns answers the same question as the
+// words below it - where does typing go - and answers it faster.
+func TestFooterRuleLightsTheFocusedHalf(t *testing.T) {
+	withColour(t)
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	sideW := m.sidebarWidth()
+
+	left := strings.Repeat("─", sideW)
+	right := strings.Repeat("─", m.width-sideW-1)
+
+	m.focus = focusSidebar
+	rule := m.footerRule(sideW)
+	if !strings.Contains(rule, focusedDivStyle.Render(left)) {
+		t.Error("the list has the keyboard but its half of the rule is not lit")
+	}
+	if !strings.Contains(rule, dividerStyle.Render(right)) {
+		t.Error("the session's half should be dim while the list has the keyboard")
+	}
+
+	m.focus = focusTerminal
+	rule = m.footerRule(sideW)
+	if !strings.Contains(rule, focusedDivStyle.Render(right)) {
+		t.Error("the session has the keyboard but its half of the rule is not lit")
+	}
+	if !strings.Contains(rule, dividerStyle.Render(left)) {
+		t.Error("the list's half should be dim while the session has the keyboard")
+	}
+
+	// A window too narrow to hold both columns still draws a rule.
+	m.width = 4
+	if got := ansi.StringWidth(m.footerRule(0)); got != 4 {
+		t.Errorf("degenerate rule is %d cells, want 4", got)
+	}
+}
+
+// The session's own output should not start hard against the divider.
+func TestGutterSeparatesTheDividerFromTheSession(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+
+	sideW := m.sidebarWidth()
+	termW, _ := m.terminalSize()
+	if sideW+1+gutter+termW != m.width {
+		t.Errorf("%d + 1 + %d + %d != %d", sideW, gutter, termW, m.width)
+	}
+
+	// A click landing in the gutter belongs to neither half.
+	before := selectedName(t, m)
+	m.Update(tea.MouseMsg{
+		X: sideW + 1, Y: 3,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	if got := selectedName(t, m); got != before {
+		t.Errorf("a click in the gutter changed the selection to %q", got)
+	}
+	if m.focus != focusSidebar {
+		t.Error("a click in the gutter moved the focus")
 	}
 }

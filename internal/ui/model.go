@@ -570,11 +570,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if msg.X < sideW {
 		return m.handleSidebarMouse(msg)
 	}
-	if msg.X == sideW || m.pane == nil {
-		return nil // the divider column
+	if msg.X < sideW+1+gutter || m.pane == nil {
+		return nil // the divider and the blank column beside it
 	}
 
-	x, y := msg.X-sideW-1, msg.Y
+	x, y := msg.X-sideW-1-gutter, msg.Y
 	if y >= m.bodyHeight() {
 		return nil // the footer
 	}
@@ -1311,8 +1311,12 @@ func (m *Model) sidebarWidth() int {
 // and the hotkey line beneath them are taken out.
 func (m *Model) bodyHeight() int { return max(1, m.height-2) }
 
+// gutter is the blank column between the divider and the session, so the
+// terminal's own output does not start hard against the line.
+const gutter = 1
+
 func (m *Model) terminalSize() (int, int) {
-	return max(2, m.width-m.sidebarWidth()-1), m.bodyHeight()
+	return max(2, m.width-m.sidebarWidth()-1-gutter), m.bodyHeight()
 }
 
 // ---------------------------------------------------------------- view
@@ -1346,6 +1350,8 @@ func (m *Model) View() string {
 		div = focusedDivStyle.Render("│")
 	}
 
+	gap := strings.Repeat(" ", gutter)
+
 	var b strings.Builder
 	// A pending copy rides out with this frame. OSC 52 draws nothing, so it is
 	// safe ahead of the rest, and clearing it here means it is sent once.
@@ -1356,6 +1362,7 @@ func (m *Model) View() string {
 	for i := 0; i < bodyH; i++ {
 		b.WriteString(sidebar[i])
 		b.WriteString(div)
+		b.WriteString(gap)
 		b.WriteString(terminal[i])
 		b.WriteString("\x1b[0m")
 		if i < bodyH-1 {
@@ -1406,6 +1413,10 @@ func (m *Model) terminalLines(w, h int) []string {
 // footerRule closes the two columns off above the hotkeys, meeting the divider
 // between them so the corner reads as one drawing rather than two lines that
 // happen to cross.
+//
+// The half of the rule under whichever column has the keyboard is lit, which
+// is the same question the words underneath answer - it is just quicker to
+// read a line than a sentence.
 func (m *Model) footerRule(sideW int) string {
 	if m.width <= 0 {
 		return ""
@@ -1413,15 +1424,16 @@ func (m *Model) footerRule(sideW int) string {
 	if sideW <= 0 || sideW >= m.width {
 		return dividerStyle.Render(strings.Repeat("─", m.width))
 	}
-	left := strings.Repeat("─", sideW)
-	right := strings.Repeat("─", max(0, m.width-sideW-1))
+
+	left, right := dividerStyle, dividerStyle
 	if m.focus == focusTerminal {
-		// The divider above it is lit while the session has the keyboard, and
-		// the corner it lands on should not be left behind.
-		return dividerStyle.Render(left) + focusedDivStyle.Render("┴") +
-			dividerStyle.Render(right)
+		right = focusedDivStyle
+	} else {
+		left = focusedDivStyle
 	}
-	return dividerStyle.Render(left + "┴" + right)
+	return left.Render(strings.Repeat("─", sideW)) +
+		dividerStyle.Render("┴") +
+		right.Render(strings.Repeat("─", max(0, m.width-sideW-1)))
 }
 
 func (m *Model) footerView() string {

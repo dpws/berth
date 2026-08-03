@@ -176,6 +176,15 @@ func TestMain(m *testing.M) {
 	// Never inherit an outer session: tmux would otherwise refuse to nest.
 	os.Unsetenv("TMUX")
 
+	// tmux shuts its server down when the last session goes away, and several
+	// tests here kill the only session they created. Without something pinning
+	// it, the next test races a server that is still exiting and its pane
+	// never receives any output. One idle session keeps the server up.
+	if err := exec.Command("tmux", "new-session", "-d", "-s", "berth-keepalive", "sh").Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "cannot start the test tmux server:", err)
+		os.Exit(1)
+	}
+
 	code := m.Run()
 
 	// Safe to kill: this server is the one behind our own socket.

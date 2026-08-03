@@ -88,18 +88,18 @@ func (m *Model) headerLine(w int) string {
 		itemMutedStyle.Render(fmt.Sprintf(" %d", len(m.sessions)))
 	leftW := 5 + 1 + len(fmt.Sprintf("%d", len(m.sessions)))
 
+	// The version reads two ways at once: an arrow and red mean there is a
+	// newer release, and a "+" means this build is ahead of its tag. They
+	// cannot both apply - a build from source is never told it is out of date
+	// - so neither has to make room for the other.
 	version := shortVersion(Version)
-	right := faintStyle.Render(version)
-	rightW := lipgloss.Width(version)
+	style := faintStyle
 	if m.newerVersion != "" {
-		notice := " ↑" + m.newerVersion
-		// Only when there is room: the version berth is on matters more than
-		// the one it could be on.
-		if 1+leftW+1+rightW+lipgloss.Width(notice) <= w {
-			right += lipgloss.NewStyle().Foreground(colSuccess).Render(notice)
-			rightW += lipgloss.Width(notice)
-		}
+		version = "↑" + version
+		style = lipgloss.NewStyle().Foreground(colDanger)
 	}
+	right := style.Render(version)
+	rightW := lipgloss.Width(version)
 
 	gap := w - 1 - leftW - rightW
 	if gap < 1 {

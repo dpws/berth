@@ -323,16 +323,17 @@ writes the new binary beside the old one and renames it over the top — which
 is atomic, and allowed even for the binary you are running, since the process
 keeps the file it started from until it next starts.
 
-The header carries the build you are on, and names a newer one beside it when
-the daily check has found one:
+The header carries the build you are on, and marks it when the daily check has
+found a newer one:
 
 ```
- BERTH 3      v0.3.0 ↑v0.4.0
+ BERTH 3              v0.3.0     up to date
+ BERTH 3             ↑v0.3.0     a newer release is out — shown in red
+ BERTH 3             v0.3.0+     built from source, ahead of that tag
 ```
 
-A build from source shows as the tag it is ahead of, with a `+` — `v0.3.0+`.
-On a narrow sidebar the notice is dropped before the version is: the build you
-are on matters more than the one you could be on.
+The two markers say opposite things and can never appear together, since a
+build from source is never told it is out of date.
 
 That check is the only request berth makes on its own. It sends nothing but
 the question, caches the answer for a day, says nothing at all when it fails,

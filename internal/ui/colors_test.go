@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/tmux"
 )
@@ -111,5 +113,36 @@ func TestPaletteIsAdaptive(t *testing.T) {
 		if !strings.HasPrefix(c.color.Light, "#") || !strings.HasPrefix(c.color.Dark, "#") {
 			t.Errorf("%s is not a hex pair: %+v", c.name, c.color)
 		}
+	}
+}
+
+// The header's version says two different things, and they must not be
+// mistaken for each other: red with an arrow means a newer release exists, a
+// "+" means this build is ahead of its tag. A build from source is never told
+// it is out of date, so the two can never appear at once.
+func TestHeaderVersionMarkers(t *testing.T) {
+	withColour(t)
+	m := newTestModel()
+	m.Update(sessions("api"))
+	before := Version
+	t.Cleanup(func() { Version = before })
+
+	Version = "v0.3.0"
+	if got := m.headerLine(28); !strings.Contains(got, faintStyle.Render("v0.3.0")) {
+		t.Error("an up-to-date version is not drawn quietly")
+	}
+
+	m.newerVersion = "v0.4.0"
+	behind := lipgloss.NewStyle().Foreground(colDanger).Render("↑v0.3.0")
+	if got := m.headerLine(28); !strings.Contains(got, behind) {
+		t.Error("a version behind a release is not drawn in red with an arrow")
+	}
+
+	// The two markers cannot collide: update.Available says nothing to a build
+	// from source, so a "+" version never also carries an arrow.
+	Version = "v0.3.0-9-gabc-dirty"
+	m.newerVersion = ""
+	if got := ansi.Strip(m.headerLine(28)); !strings.Contains(got, "v0.3.0+") {
+		t.Errorf("header = %q, want the ahead-of-tag marker", got)
 	}
 }

@@ -910,21 +910,15 @@ func TestHeaderShowsTheVersionOnTheRight(t *testing.T) {
 		t.Errorf("header = %q, want the version on the right", line)
 	}
 
-	// A newer release is named beside it when there is room.
+	// An update turns it into an arrow, which fits where a second version
+	// would not have.
 	m.newerVersion = "v0.4.0"
 	line = ansi.Strip(m.headerLine(28))
-	if !strings.Contains(line, "v0.3.0") || !strings.Contains(line, "↑v0.4.0") {
-		t.Errorf("header = %q, want both versions", line)
+	if !strings.HasSuffix(line, "↑v0.3.0") {
+		t.Errorf("header = %q, want the version marked as behind", line)
 	}
-
-	// Where there is not, the build berth is on wins: it matters more than the
-	// one it could be on.
-	line = ansi.Strip(m.headerLine(18))
-	if !strings.Contains(line, "v0.3.0") {
-		t.Errorf("narrow header = %q, want the current version kept", line)
-	}
-	if strings.Contains(line, "↑") {
-		t.Errorf("narrow header = %q, want the notice dropped", line)
+	if ansi.StringWidth(m.headerLine(18)) != 18 {
+		t.Error("the marked version does not fit a narrow sidebar")
 	}
 
 	// And a header with room for neither still fits its column.

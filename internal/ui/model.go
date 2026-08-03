@@ -36,6 +36,8 @@ const (
 	modeFilter
 	modeHelp
 	modeSettings
+	modePresets
+	modeSavePreset
 )
 
 // attachDelay debounces attaching while the user scrolls the list.
@@ -138,6 +140,11 @@ type Model struct {
 	// frame, as an OSC 52 sequence.
 	clipboard string
 
+	// presets are the saved session shapes, kept in their own file next to the
+	// config.
+	presets      []config.Preset
+	presetCursor int
+
 	// spinner advances the glyph on working sessions. It only ticks while
 	// something is working, so an idle berth redraws no more than before.
 	spinner        int
@@ -190,6 +197,9 @@ func New(cfg config.Config) *Model {
 	if !cfg.HideAgentStatus {
 		m.agentWatcher = agent.NewWatcher()
 	}
+	// A presets file that will not parse should not stop berth starting; the
+	// list simply comes up empty and saving one writes a good file over it.
+	m.presets, _ = config.LoadPresets()
 	return m
 }
 
@@ -499,6 +509,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case modeSettings:
 		return m.handleSettingsKey(msg)
+	case modePresets:
+		return m.handlePresetsKey(msg)
+	case modeSavePreset:
+		return m.handleSavePresetKey(msg)
 	}
 
 	// Ctrl+O toggles which half of the screen owns the keyboard. Everything
@@ -755,6 +769,12 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 		m.nameInput.CursorEnd()
 		m.nameInput.Focus()
 		return textinput.Blink
+
+	case "p":
+		return m.openPresets()
+
+	case "P":
+		return m.openSavePreset()
 
 	case ",":
 		m.mode = modeSettings
@@ -1306,7 +1326,9 @@ func (m *Model) View() string {
 	switch m.mode {
 	case modeSettings:
 		return m.settingsView()
-	case modeNew, modeRename, modeConfirmKill, modeHelp:
+	case modePresets:
+		return m.presetsView()
+	case modeNew, modeRename, modeConfirmKill, modeHelp, modeSavePreset:
 		return m.dialogView()
 	}
 
@@ -1401,6 +1423,7 @@ func (m *Model) footerView() string {
 			"r", "rename",
 			"/", "filter",
 			m.cfg.PasteImageKey, "image",
+			"p", "presets",
 			",", "settings",
 			"?", "help",
 			"q", "quit",
@@ -1435,6 +1458,8 @@ func (m *Model) dialogView() string {
 		body = m.renameDialog()
 	case modeConfirmKill:
 		body = m.killDialog()
+	case modeSavePreset:
+		body = m.savePresetDialog()
 	case modeHelp:
 		body = m.helpText()
 	}
@@ -1517,6 +1542,23 @@ func (m *Model) renameDialog() string {
 	}, "\n")
 }
 
+// savePresetDialog asks what to call the preset being saved.
+func (m *Model) savePresetDialog() string {
+	name := ""
+	if s, ok := m.selected(); ok {
+		name = s.Name + " (" + sessionKind(s) + ")"
+	}
+	return strings.Join([]string{
+		titleStyle.Render("Save preset"),
+		"",
+		footerStyle.Render("from " + name),
+		"",
+		m.nameInput.View(),
+		"",
+		footerStyle.Render("enter save · esc cancel"),
+	}, "\n")
+}
+
 func (m *Model) killDialog() string {
 	name := ""
 	if s, ok := m.selected(); ok {
@@ -1540,6 +1582,8 @@ func (m *Model) helpText() string {
 		{"x", "kill the selected session"},
 		{"r", "rename the selected session"},
 		{"/", "filter by name"},
+		{"p", "start from a preset"},
+		{"P", "save this session as a preset"},
 		{",", "settings"},
 		{m.cfg.PasteImageKey, "paste an image path into the session"},
 		{"click", "select a row; click again to focus it"},

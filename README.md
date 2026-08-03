@@ -89,6 +89,8 @@ a session, since emacs wants that key for itself.
 | `x` | kill the selected session (asks first) |
 | `r` | rename the selected session |
 | `/` | filter by name |
+| `p` | start a session from a preset |
+| `P` | save the selected session as a preset |
 | `,` | settings — edit the config without leaving berth |
 | `ctrl+y` | paste an image into the focused session |
 | drag | select text in the session, copied on release |
@@ -197,6 +199,32 @@ being silently rewritten into a longer path. Directories only — this is the
 field that says where a session starts — and hidden ones stay out of the way
 until you type the leading dot. `↑`/`↓` move between fields, since `tab` is
 busy completing.
+
+### Presets
+
+A session you set up often is worth keeping. `P` saves the selected one as a
+preset — its kind, its directory and a name to offer — and `p` lists what you
+have saved:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Presets  2                                                  │
+│                                                              │
+│  api on claude                           claude  ~/code/api  │
+│  web on codex                             codex  ~/code/web  │
+│                                                              │
+│  enter use · x remove · esc close                            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Choosing one opens the new session form already filled in, rather than starting
+it outright: the preset saves the typing, not the last look before something
+runs. So you can still change the start mode, point it at a different
+directory, or rename it before pressing enter. `x` removes one.
+
+Presets live in `~/.config/berth/presets.json`, next to the config rather than
+inside it — the config is a flat list of settings, and this is a list of
+things. Saving under a name already in use replaces it.
 
 ## What each session is doing
 

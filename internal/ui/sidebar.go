@@ -183,18 +183,21 @@ func (m *Model) sessionLine(s tmux.Session, selected bool, w int) string {
 // statusDot picks the glyph in front of a session's name. For a session with
 // an agent in it that is what the agent is doing; otherwise it falls back to
 // whether tmux has a client attached.
+//
+// The three states are meant to be told apart at a glance and without colour:
+// a spinner turning means work is happening, a question mark means the session
+// is stuck until you answer it, and a hollow circle means neither.
 func (m *Model) statusDot(s tmux.Session) (string, lipgloss.TerminalColor) {
-	kind := sessionKind(s)
 	switch m.agents[s.Name].Status {
 	case agent.Waiting:
-		// Deliberately the odd one out: this is the only state that is stuck
-		// until you do something about it.
-		return "▲", colDanger
+		return "?", colDanger
 	case agent.Busy, agent.Shell:
-		return "◐", kindColor(kind)
+		return spinnerFrames[m.spinner%len(spinnerFrames)], colSuccess
 	case agent.Idle:
-		return "○", colMuted
+		return "○", colIdle
 	}
+
+	kind := sessionKind(s)
 	if s.Attached > 0 {
 		return "●", kindColor(kind)
 	}

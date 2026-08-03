@@ -15,6 +15,14 @@ type Config struct {
 	ClaudeCommand string `json:"claude_command"`
 	// CodexCommand is run inside sessions of kind "codex".
 	CodexCommand string `json:"codex_command"`
+	// ClaudeContinueArgs and ClaudeResumeArgs are appended to ClaudeCommand
+	// when a session is started to carry on an earlier conversation: the first
+	// picks up the most recent one in the directory, the second asks which.
+	ClaudeContinueArgs string `json:"claude_continue_args"`
+	ClaudeResumeArgs   string `json:"claude_resume_args"`
+	// CodexContinueArgs and CodexResumeArgs do the same for Codex.
+	CodexContinueArgs string `json:"codex_continue_args"`
+	CodexResumeArgs   string `json:"codex_resume_args"`
 	// ShellCommand is run inside sessions of kind "shell". Empty means $SHELL.
 	ShellCommand string `json:"shell_command"`
 	// DefaultDir is the working directory suggested for new sessions.
@@ -79,16 +87,21 @@ func Default() Config {
 	return Config{
 		ClaudeCommand: "claude",
 		CodexCommand:  "codex",
-		ShellCommand:  shell,
-		DefaultDir:    home,
-		SidebarWidth:  28,
-		RefreshMillis: 2000,
-		HideStatusBar: true,
-		Mouse:         true,
-		ImageDropDir:  filepath.Join(home, "berth-drop"),
-		PasteImageKey: "ctrl+y",
-		QuitKey:       "ctrl+x",
-		ClipAgentURL:  "http://127.0.0.1:8377",
+
+		ClaudeContinueArgs: "--continue",
+		ClaudeResumeArgs:   "--resume",
+		CodexContinueArgs:  "resume --last",
+		CodexResumeArgs:    "resume",
+		ShellCommand:       shell,
+		DefaultDir:         home,
+		SidebarWidth:       28,
+		RefreshMillis:      2000,
+		HideStatusBar:      true,
+		Mouse:              true,
+		ImageDropDir:       filepath.Join(home, "berth-drop"),
+		PasteImageKey:      "ctrl+y",
+		QuitKey:            "ctrl+x",
+		ClipAgentURL:       "http://127.0.0.1:8377",
 
 		UsageRefreshSeconds: 30,
 	}

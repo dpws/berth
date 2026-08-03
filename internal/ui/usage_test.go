@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/dpws/berth/internal/agent"
 	"strings"
@@ -168,16 +169,24 @@ func TestStatusDotReflectsTheAgent(t *testing.T) {
 	m := newTestModel()
 	s := tmux.Session{Name: "api", Kind: tmux.KindClaude, Attached: 1}
 
+	// The three states must be distinguishable without colour: a turning
+	// spinner, a question mark that is asking you something, and a hollow
+	// circle for neither.
 	cases := map[agent.Status]string{
-		agent.Waiting: "▲",
-		agent.Busy:    "◐",
-		agent.Shell:   "◐",
+		agent.Waiting: "?",
 		agent.Idle:    "○",
 	}
 	for status, want := range cases {
 		withAgents(m, map[string]agent.Info{"api": {Status: status}})
 		if got, _ := m.statusDot(s); got != want {
 			t.Errorf("status %q drew %q, want %q", status, got, want)
+		}
+	}
+	for _, status := range []agent.Status{agent.Busy, agent.Shell} {
+		withAgents(m, map[string]agent.Info{"api": {Status: status}})
+		got, _ := m.statusDot(s)
+		if !slices.Contains(spinnerFrames, got) {
+			t.Errorf("status %q drew %q, want a spinner frame", status, got)
 		}
 	}
 

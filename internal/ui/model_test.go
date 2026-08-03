@@ -201,9 +201,43 @@ func TestCommandPerKind(t *testing.T) {
 		tmux.KindShell:  "/bin/bash",
 	}
 	for kind, want := range cases {
-		if got := m.commandFor(kind); got != want {
+		if got := m.commandFor(kind, tmux.StartNew); got != want {
 			t.Errorf("commandFor(%q) = %q, want %q", kind, got, want)
 		}
+	}
+}
+
+// Resuming appends to the configured command rather than replacing it, so a
+// command carrying options of its own keeps them.
+func TestCommandForResumeModes(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ClaudeCommand = "claude --model opus"
+	m.cfg.ClaudeContinueArgs = "--continue"
+	m.cfg.ClaudeResumeArgs = "--resume"
+	m.cfg.CodexCommand = "codex"
+	m.cfg.CodexContinueArgs = "resume --last"
+	m.cfg.ShellCommand = "/bin/bash"
+
+	cases := []struct {
+		kind, start, want string
+	}{
+		{tmux.KindClaude, tmux.StartNew, "claude --model opus"},
+		{tmux.KindClaude, tmux.StartContinue, "claude --model opus --continue"},
+		{tmux.KindClaude, tmux.StartResume, "claude --model opus --resume"},
+		{tmux.KindCodex, tmux.StartContinue, "codex resume --last"},
+		// A shell has no conversation to carry on.
+		{tmux.KindShell, tmux.StartResume, "/bin/bash"},
+	}
+	for _, c := range cases {
+		if got := m.commandFor(c.kind, c.start); got != c.want {
+			t.Errorf("commandFor(%q, %q) = %q, want %q", c.kind, c.start, got, c.want)
+		}
+	}
+
+	// An empty args string means the mode adds nothing rather than a space.
+	m.cfg.ClaudeResumeArgs = ""
+	if got := m.commandFor(tmux.KindClaude, tmux.StartResume); got != "claude --model opus" {
+		t.Errorf("with no resume args, got %q", got)
 	}
 }
 

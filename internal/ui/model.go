@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -50,6 +51,8 @@ const (
 	// statusFrame is how often the fade is redrawn, and only while one is
 	// running - nothing ticks at this rate when the footer is idle.
 	statusFrame = 80 * time.Millisecond
+	// spinnerFrame is how often a working session's glyph advances.
+	spinnerFrame = 120 * time.Millisecond
 )
 
 // Model is the root Bubble Tea model.
@@ -76,6 +79,10 @@ type Model struct {
 
 	nameInput textinput.Model
 	dirInput  textinput.Model
+	newStart  string
+	// dirMatches is what the directory field would complete to, shown under it
+	// so tab is not a guess in the dark.
+	dirMatches []string
 	// settingInput edits one config value at a time. It is separate from the
 	// others so opening settings cannot disturb a half-typed session name.
 	settingInput   textinput.Model
@@ -131,6 +138,11 @@ type Model struct {
 	// frame, as an OSC 52 sequence.
 	clipboard string
 
+	// spinner advances the glyph on working sessions. It only ticks while
+	// something is working, so an idle berth redraws no more than before.
+	spinner        int
+	spinnerRunning bool
+
 	// mouseOn tracks whether berth is capturing the mouse. Capturing it is what
 	// lets you click a row and scroll a session, and also what stops your
 	// terminal doing its own text selection, so it can be turned off and on
@@ -168,6 +180,7 @@ func New(cfg config.Config) *Model {
 		settingInput: value,
 		settings:     settingsList(),
 		newKind:      tmux.KindClaude,
+		newStart:     tmux.StartNew,
 		appFocused:   true,
 		mouseOn:      cfg.Mouse,
 	}
@@ -198,6 +211,9 @@ type tickMsg time.Time
 
 // statusTickMsg advances the fade of the message in the footer.
 type statusTickMsg struct{}
+
+// spinnerTickMsg advances the glyph on working sessions.
+type spinnerTickMsg struct{}
 
 // usageTickMsg drives the slow poll of the agents' rate limits.
 type usageTickMsg time.Time
@@ -357,7 +373,7 @@ func waitForPane(p *term.Pane) tea.Cmd {
 // Update runs the message through the model, then keeps the terminal's title
 // in step with whatever the result left selected.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m, tea.Batch(m.update(msg), m.titleCmd(), m.statusCmd())
+	return m, tea.Batch(m.update(msg), m.titleCmd(), m.statusCmd(), m.spinnerCmd())
 }
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
@@ -373,6 +389,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 
 	case tickMsg:
 		return tea.Batch(listSessions(), tickCmd(m.cfg.RefreshMillis))
+
+	case spinnerTickMsg:
+		m.spinnerRunning = false
+		m.spinner++
+		return nil
 
 	case statusTickMsg:
 		m.statusTicking = false
@@ -698,7 +719,9 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 
 	case "n":
 		m.mode = modeNew
-		m.formField = 0
+		m.formField = fieldName
+		m.dirMatches = nil
+		m.newStart = tmux.StartNew
 		m.newKind = tmux.KindClaude
 		m.nameInput.SetValue("")
 		m.dirInput.SetValue("")
@@ -757,25 +780,39 @@ func (m *Model) handleNewKey(msg tea.KeyMsg) tea.Cmd {
 		m.dirInput.Blur()
 		return nil
 
-	case "tab", "down":
-		m.formField = (m.formField + 1) % 3
-		m.syncFormFocus()
-		return textinput.Blink
+	case "tab":
+		// On the directory field tab completes, the way it would in a shell.
+		// Everything else, and a path with nothing left to add, moves on.
+		if m.formField == fieldDir {
+			if m.completeDirField() {
+				return nil
+			}
+		}
+		return m.moveFormField(1)
+
+	case "down":
+		return m.moveFormField(1)
 
 	case "shift+tab", "up":
-		m.formField = (m.formField + 2) % 3
-		m.syncFormFocus()
-		return textinput.Blink
+		return m.moveFormField(-1)
 
 	case "left":
-		if m.formField == 1 {
+		switch m.formField {
+		case fieldKind:
 			m.newKind = cycleKind(m.newKind, -1)
+			return nil
+		case fieldStart:
+			m.newStart = cycleStart(m.newStart, -1)
 			return nil
 		}
 
 	case "right", " ":
-		if m.formField == 1 {
+		switch m.formField {
+		case fieldKind:
 			m.newKind = cycleKind(m.newKind, 1)
+			return nil
+		case fieldStart:
+			m.newStart = cycleStart(m.newStart, 1)
 			return nil
 		}
 
@@ -785,12 +822,41 @@ func (m *Model) handleNewKey(msg tea.KeyMsg) tea.Cmd {
 
 	var cmd tea.Cmd
 	switch m.formField {
-	case 0:
+	case fieldName:
 		m.nameInput, cmd = m.nameInput.Update(msg)
-	case 2:
+	case fieldDir:
+		before := m.dirInput.Value()
 		m.dirInput, cmd = m.dirInput.Update(msg)
+		if m.dirInput.Value() != before {
+			// Offer what the new text could become, without changing it.
+			_, m.dirMatches = completeDir(m.dirInput.Value())
+		}
 	}
 	return cmd
+}
+
+// moveFormField steps between the fields of the new session form.
+func (m *Model) moveFormField(delta int) tea.Cmd {
+	m.formField = (m.formField + delta + formFields) % formFields
+	m.syncFormFocus()
+	return textinput.Blink
+}
+
+// completeDirField extends the directory to the longest path it certainly
+// starts with, and reports whether anything changed.
+func (m *Model) completeDirField() bool {
+	typed := m.dirInput.Value()
+	if typed == "" {
+		typed = m.cfg.DefaultDir + string(os.PathSeparator)
+	}
+	completed, matches := completeDir(typed)
+	m.dirMatches = matches
+	if completed == m.dirInput.Value() {
+		return false
+	}
+	m.dirInput.SetValue(completed)
+	m.dirInput.CursorEnd()
+	return true
 }
 
 func (m *Model) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
@@ -879,7 +945,7 @@ func (m *Model) createSession() tea.Cmd {
 		dir = m.cfg.DefaultDir
 	}
 
-	command := m.commandFor(kind)
+	command := m.commandFor(kind, m.newStart)
 
 	m.mode = modeNormal
 	m.nameInput.Blur()
@@ -905,15 +971,31 @@ func (m *Model) createSession() tea.Cmd {
 }
 
 // commandFor returns the command a session of the given kind should run.
-func (m *Model) commandFor(kind string) string {
+//
+// The resume arguments are appended to the configured command rather than
+// replacing it, so a command with options of its own keeps them.
+func (m *Model) commandFor(kind, start string) string {
+	var base, cont, resume string
 	switch kind {
 	case tmux.KindClaude:
-		return m.cfg.ClaudeCommand
+		base, cont, resume = m.cfg.ClaudeCommand, m.cfg.ClaudeContinueArgs, m.cfg.ClaudeResumeArgs
 	case tmux.KindCodex:
-		return m.cfg.CodexCommand
+		base, cont, resume = m.cfg.CodexCommand, m.cfg.CodexContinueArgs, m.cfg.CodexResumeArgs
 	default:
-		return m.cfg.ShellCommand
+		return m.cfg.ShellCommand // a shell has no conversation to carry on
 	}
+
+	args := ""
+	switch start {
+	case tmux.StartContinue:
+		args = cont
+	case tmux.StartResume:
+		args = resume
+	}
+	if args = strings.TrimSpace(args); args == "" {
+		return base
+	}
+	return strings.TrimSpace(base) + " " + args
 }
 
 // applySessions folds a fresh session list into the model, keeping the cursor
@@ -1086,9 +1168,9 @@ func (m *Model) syncFormFocus() {
 	m.nameInput.Blur()
 	m.dirInput.Blur()
 	switch m.formField {
-	case 0:
+	case fieldName:
 		m.nameInput.Focus()
-	case 2:
+	case fieldDir:
 		m.dirInput.Focus()
 	}
 }
@@ -1114,6 +1196,27 @@ func (m *Model) statusLife() float64 {
 		return 0
 	}
 	return float64(age) / float64(statusFade)
+}
+
+// spinnerCmd keeps the spinner turning while any session is working, and stops
+// when they all go quiet - an idle berth should not be redrawing ten times a
+// second for a glyph that is not moving.
+func (m *Model) spinnerCmd() tea.Cmd {
+	if m.spinnerRunning || m.cfg.HideAgentStatus {
+		return nil
+	}
+	working := false
+	for _, info := range m.agents {
+		if info.Status.Active() {
+			working = true
+			break
+		}
+	}
+	if !working {
+		return nil
+	}
+	m.spinnerRunning = true
+	return tea.Tick(spinnerFrame, func(time.Time) tea.Msg { return spinnerTickMsg{} })
 }
 
 // statusCmd keeps a redraw running while a message is fading, and stops as
@@ -1331,25 +1434,57 @@ func (m *Model) newDialog() string {
 		return labelStyle.Render(s)
 	}
 
-	var chips []string
-	for _, k := range tmux.Kinds {
-		if k == m.newKind {
-			chips = append(chips, chipActiveStyle.Render(k))
-		} else {
-			chips = append(chips, chipStyle.Render(k))
+	chips := func(options []string, current string) string {
+		var out []string
+		for _, o := range options {
+			if o == current {
+				out = append(out, chipActiveStyle.Render(o))
+			} else {
+				out = append(out, chipStyle.Render(o))
+			}
 		}
+		return strings.Join(out, " ")
 	}
 
-	dirValue := m.dirInput.View()
-	return strings.Join([]string{
+	start := chips(tmux.Starts, m.newStart)
+	if m.newKind == tmux.KindShell {
+		// A shell has no conversation to carry on, so the row stays visible
+		// but says why it is doing nothing.
+		start = faintStyle.Render("only for agents")
+	}
+
+	rows := []string{
 		titleStyle.Render("New session"),
 		"",
-		label(0, "name") + "  " + m.nameInput.View(),
-		label(1, "kind") + "  " + strings.Join(chips, " "),
-		label(2, "dir ") + "  " + dirValue,
+		label(fieldName, "name ") + "  " + m.nameInput.View(),
+		label(fieldKind, "kind ") + "  " + chips(tmux.Kinds, m.newKind),
+		label(fieldStart, "start") + "  " + start,
+		label(fieldDir, "dir  ") + "  " + m.dirInput.View(),
+	}
+	if hint := m.dirHint(); hint != "" {
+		rows = append(rows, "         "+hint)
+	}
+	return strings.Join(append(rows,
 		"",
-		footerStyle.Render("tab switch · ←/→ kind · enter create · esc cancel"),
-	}, "\n")
+		footerStyle.Render("tab complete dir · ↑/↓ switch · ←/→ choose · enter create · esc cancel"),
+	), "\n")
+}
+
+// dirHint lists what the directory field could complete to.
+func (m *Model) dirHint() string {
+	if m.formField != fieldDir || len(m.dirMatches) == 0 {
+		return ""
+	}
+	if len(m.dirMatches) == 1 {
+		return "" // already completed in full; saying so adds nothing
+	}
+	shown := m.dirMatches
+	more := ""
+	if len(shown) > maxCompletions {
+		more = fmt.Sprintf(" +%d", len(shown)-maxCompletions)
+		shown = shown[:maxCompletions]
+	}
+	return faintStyle.Render(strings.Join(shown, "  ") + more)
 }
 
 func (m *Model) renameDialog() string {
@@ -1438,6 +1573,25 @@ func defaultName(kind, dir string) string {
 		}
 	}
 	return base
+}
+
+// The fields of the new session form, in the order they are shown.
+const (
+	fieldName = iota
+	fieldKind
+	fieldStart
+	fieldDir
+	formFields
+)
+
+// cycleStart steps through the start modes, wrapping in either direction.
+func cycleStart(s string, delta int) string {
+	for i, start := range tmux.Starts {
+		if start == s {
+			return tmux.Starts[(i+delta+len(tmux.Starts))%len(tmux.Starts)]
+		}
+	}
+	return tmux.Starts[0]
 }
 
 // cycleKind steps through tmux.Kinds, wrapping in either direction.

@@ -23,6 +23,17 @@ const (
 // session form cycles through them.
 var Kinds = []string{KindClaude, KindCodex, KindShell}
 
+// How an agent session starts: fresh, carrying on where it left off, or
+// asking which earlier conversation to pick up.
+const (
+	StartNew      = "new"
+	StartContinue = "continue"
+	StartResume   = "resume"
+)
+
+// Starts are the start modes the new session form cycles through.
+var Starts = []string{StartNew, StartContinue, StartResume}
+
 // tmux user options used to tag sessions berth created.
 const (
 	optManaged = "@berth"

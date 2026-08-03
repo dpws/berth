@@ -17,7 +17,7 @@ again, still running when you come back.
 │──────────────────│ ❯ refactor the request parser       │
 │▸ ◐ api    claude │                                     │
 │   refactor the … │ (live - type straight into it)      │
-│  ▲ web    codex  │                                     │
+│  ? web    codex  │                                     │
 │  ○ dots   bash   │                                     │
 │──────────────────│                                     │
 │ 5h  ▓▓▓░░░  28%  │                                     │
@@ -85,7 +85,7 @@ a session, since emacs wants that key for itself.
 | `↑`/`↓`, `j`/`k` | move (the terminal follows the selection) |
 | `enter`, `l` | hand the keyboard to the terminal |
 | `ctrl+o` | toggle list ⇄ terminal focus |
-| `n` | new session — name, kind (claude/codex/shell), directory |
+| `n` | new session — name, kind, start mode, directory |
 | `x` | kill the selected session (asks first) |
 | `r` | rename the selected session |
 | `/` | filter by name |
@@ -138,6 +138,10 @@ The file itself is optional, at `~/.config/berth/config.json`:
 {
   "claude_command": "claude",
   "codex_command": "codex",
+  "claude_continue_args": "--continue",
+  "claude_resume_args": "--resume",
+  "codex_continue_args": "resume --last",
+  "codex_resume_args": "resume",
   "shell_command": "/bin/bash",
   "default_dir": "/home/you",
   "sidebar_width": 28,
@@ -173,6 +177,27 @@ follows the cursor, so berth is findable in a row of terminal tabs instead of
 looking like one more anonymous shell. `usage_refresh_seconds` is how often the rate
 limit block is re-read.
 
+## Starting and resuming sessions
+
+`n` opens the new session form: a name, a kind, how it should start, and a
+directory.
+
+**Start mode** decides whether an agent begins fresh or picks up where it left
+off. `new` is a clean start; `continue` carries on the most recent conversation
+in that directory; `resume` asks which earlier one to take. Shell sessions have
+no conversation to carry on, and the row says so. The arguments each mode adds
+are configurable — `claude_continue_args` and friends — and they are *appended*
+to the configured command, so `"claude_command": "claude --model opus"` becomes
+`claude --model opus --continue` rather than losing its options.
+
+**The directory field completes with `tab`**, as a shell would: it extends the
+path as far as the candidates agree, and lists them underneath when more than
+one fits. `~` is expanded to match, and kept in the text afterwards rather than
+being silently rewritten into a longer path. Directories only — this is the
+field that says where a session starts — and hidden ones stay out of the way
+until you type the leading dot. `↑`/`↓` move between fields, since `tab` is
+busy completing.
+
 ## What each session is doing
 
 Every agent session carries an indicator, and a dim second line saying what it
@@ -182,9 +207,9 @@ was last asked to do:
 ┌────────────────────────────┐
 │ BERTH 4                    │
 │────────────────────────────│
-│▸ ◐ api              claude │
+│▸ ⠹ api              claude │
 │    rewrite the parser      │
-│  ▲ web               codex │
+│  ? web               codex │
 │    approve running: rm -r… │
 │  ○ docs             claude │
 │    fix the install section │
@@ -192,11 +217,17 @@ was last asked to do:
 └────────────────────────────┘
 ```
 
-| | |
-| --- | --- |
-| `◐` | the agent is working |
-| `▲` | **the agent is waiting on you** — a question or a permission prompt |
-| `○` | idle, or for a plain shell, no client attached |
+| | | |
+| --- | --- | --- |
+| spinner | green | the agent is working |
+| `?` | red | **the agent is waiting on you** — a question or a permission prompt |
+| `○` | white | idle, or for a plain shell, no client attached |
+
+The three are meant to be told apart without colour as well as with it: a
+spinner turning means something is happening, a question mark means the session
+is stuck until you answer it. The spinner only ticks while something is
+actually working, so an idle berth is not redrawing for a glyph that is not
+moving.
 
 When anything is waiting, berth also marks the terminal title — `● api (claude)
 — berth`, or `●2 …` for two — so a tab sitting in the background tells you a

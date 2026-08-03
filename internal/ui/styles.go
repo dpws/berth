@@ -22,6 +22,9 @@ var (
 	colFocus   = lipgloss.AdaptiveColor{Light: "#2F6F9F", Dark: "#7AA2D6"}
 	colDanger  = lipgloss.AdaptiveColor{Light: "#B3261E", Dark: "#F2846B"}
 	colSuccess = lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#8BC48F"}
+	// colIdle is the quiet end of the status colours: white on a dark
+	// terminal, and dark on a light one so it stays legible either way.
+	colIdle = lipgloss.AdaptiveColor{Light: "#3A3A3A", Dark: "#FFFFFF"}
 )
 
 var (
@@ -98,6 +101,11 @@ func parseHex(s string) (r, g, b int, ok bool) {
 	}
 	return int(v>>16) & 0xFF, int(v>>8) & 0xFF, int(v) & 0xFF, true
 }
+
+// spinnerFrames animates a working session. Braille dots read as motion at
+// small sizes better than a rotating bar, which is why every agent CLI uses
+// them.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func kindColor(kind string) lipgloss.TerminalColor {
 	switch kind {

@@ -8,7 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/config"
+	"github.com/dpws/berth/internal/tmux"
 )
 
 func openSettings(t *testing.T) *Model {
@@ -285,5 +287,39 @@ func TestSettingsFitsAnySize(t *testing.T) {
 				t.Errorf("%dx%d cursor %d rendered nothing", size[0], size[1], cursor)
 			}
 		}
+	}
+}
+
+// The spinner should only be running when something is actually working, or
+// an idle berth redraws ten times a second for a glyph that is not moving.
+func TestSpinnerRunsOnlyWhileSomethingWorks(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{{Name: "api", Kind: tmux.KindClaude, Managed: true}}))
+
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Idle}})
+	if cmd := m.spinnerCmd(); cmd != nil {
+		t.Error("the spinner ticks with nothing working")
+	}
+
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy}})
+	if cmd := m.spinnerCmd(); cmd == nil {
+		t.Fatal("the spinner does not tick while a session works")
+	}
+	if cmd := m.spinnerCmd(); cmd != nil {
+		t.Error("a second spinner chain started alongside the first")
+	}
+
+	// Advancing a frame moves the glyph on.
+	before, _ := m.statusDot(tmux.Session{Name: "api", Kind: tmux.KindClaude})
+	m.Update(spinnerTickMsg{})
+	after, _ := m.statusDot(tmux.Session{Name: "api", Kind: tmux.KindClaude})
+	if before == after {
+		t.Error("the spinner did not advance")
+	}
+
+	m.cfg.HideAgentStatus = true
+	m.spinnerRunning = false
+	if cmd := m.spinnerCmd(); cmd != nil {
+		t.Error("the spinner ticks even with agent status hidden")
 	}
 }

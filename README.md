@@ -1,8 +1,11 @@
 # berth
 
-A terminal UI for juggling Claude Code and plain shell sessions. tmux does the
-heavy lifting underneath; berth gives it a session list on the left and the
-selected session's **live terminal** on the rest of the screen.
+A terminal UI for juggling Claude Code, Codex and plain shell sessions. tmux
+does the heavy lifting underneath; berth gives it a session list on the left
+and the selected session's **live terminal** on the rest of the screen.
+
+Every session gets a berth: a slot in the list you can dock into and leave
+again, still running when you come back.
 
 ```
 ┌──────────────┬────────────────────────────────────┐

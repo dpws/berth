@@ -323,12 +323,16 @@ writes the new binary beside the old one and renames it over the top — which
 is atomic, and allowed even for the binary you are running, since the process
 keeps the file it started from until it next starts.
 
-berth also asks GitHub once a day whether there is a newer release, and says
-so in the header:
+The header carries the build you are on, and names a newer one beside it when
+the daily check has found one:
 
 ```
- BERTH 3  ↑v0.4.0
+ BERTH 3      v0.3.0 ↑v0.4.0
 ```
+
+A build from source shows as the tag it is ahead of, with a `+` — `v0.3.0+`.
+On a narrow sidebar the notice is dropped before the version is: the build you
+are on matters more than the one you could be on.
 
 That check is the only request berth makes on its own. It sends nothing but
 the question, caches the answer for a day, says nothing at all when it fails,

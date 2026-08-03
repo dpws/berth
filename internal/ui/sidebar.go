@@ -20,16 +20,7 @@ func (m *Model) sidebarLines(w, h int) []string {
 	m.rowSessions = make([]int, 0, h)
 	blank := func() { m.rowSessions = append(m.rowSessions, -1) }
 
-	header := titleStyle.Render("BERTH")
-	count := itemMutedStyle.Render(fmt.Sprintf(" %d", len(m.sessions)))
-	// A newer release is worth saying once and then leaving where it can be
-	// noticed, rather than only in a message that fades.
-	notice := ""
-	if m.newerVersion != "" {
-		notice = lipgloss.NewStyle().Foreground(colSuccess).
-			Render("  ↑" + m.newerVersion)
-	}
-	lines = append(lines, pad.Render(truncate(" "+header+count+notice, w)))
+	lines = append(lines, pad.Render(m.headerLine(w)))
 	blank()
 	lines = append(lines, pad.Render(dividerStyle.Render(strings.Repeat("─", max(0, w)))))
 	blank()
@@ -87,6 +78,52 @@ func (m *Model) sidebarLines(w, h int) []string {
 	}
 	m.rowSessions = m.rowSessions[:min(len(m.rowSessions), h)]
 	return lines[:h]
+}
+
+// headerLine is the top row: what this is and how many sessions on the left,
+// which build it is on the right. A newer release is named beside it, since a
+// message that fades is easy to miss.
+func (m *Model) headerLine(w int) string {
+	left := titleStyle.Render("BERTH") +
+		itemMutedStyle.Render(fmt.Sprintf(" %d", len(m.sessions)))
+	leftW := 5 + 1 + len(fmt.Sprintf("%d", len(m.sessions)))
+
+	version := shortVersion(Version)
+	right := faintStyle.Render(version)
+	rightW := lipgloss.Width(version)
+	if m.newerVersion != "" {
+		notice := " ↑" + m.newerVersion
+		// Only when there is room: the version berth is on matters more than
+		// the one it could be on.
+		if 1+leftW+1+rightW+lipgloss.Width(notice) <= w {
+			right += lipgloss.NewStyle().Foreground(colSuccess).Render(notice)
+			rightW += lipgloss.Width(notice)
+		}
+	}
+
+	gap := w - 1 - leftW - rightW
+	if gap < 1 {
+		// Too narrow for both; the count is the part worth keeping.
+		return truncate(" "+left, w)
+	}
+	return " " + left + strings.Repeat(" ", gap) + right
+}
+
+// shortVersion keeps a version to something a sidebar can hold. A build with
+// commits or changes on top of a tag is shown as that tag with a "+", which
+// says it is ahead without spelling out the hash.
+func shortVersion(v string) string {
+	if v == "" {
+		return "dev"
+	}
+	base, _, extra := strings.Cut(strings.TrimPrefix(v, "v"), "-")
+	if base == "" || base == "dev" {
+		return "dev"
+	}
+	if extra {
+		return "v" + base + "+"
+	}
+	return "v" + base
 }
 
 // listRow is one rendered line of the session list, and the session it belongs

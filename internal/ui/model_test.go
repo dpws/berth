@@ -874,3 +874,63 @@ func TestMovingPastAFilteredOutSession(t *testing.T) {
 		t.Errorf("cursor on %q, want it still on the moved session", got)
 	}
 }
+
+func TestShortVersion(t *testing.T) {
+	cases := map[string]string{
+		"v0.3.0":                  "v0.3.0",
+		"0.3.0":                   "v0.3.0",
+		"v0.3.0-9-gabc1234":       "v0.3.0+",
+		"v0.3.0-9-gabc1234-dirty": "v0.3.0+",
+		"dev":                     "dev",
+		"":                        "dev",
+	}
+	for in, want := range cases {
+		if got := shortVersion(in); got != want {
+			t.Errorf("shortVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestHeaderShowsTheVersionOnTheRight(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("api", "web"))
+
+	before := Version
+	t.Cleanup(func() { Version = before })
+	Version = "v0.3.0"
+
+	line := ansi.Strip(m.headerLine(28))
+	if ansi.StringWidth(m.headerLine(28)) != 28 {
+		t.Errorf("header is %d cells, want 28", ansi.StringWidth(m.headerLine(28)))
+	}
+	if !strings.HasPrefix(line, " BERTH 2") {
+		t.Errorf("header = %q, want the count on the left", line)
+	}
+	if !strings.HasSuffix(line, "v0.3.0") {
+		t.Errorf("header = %q, want the version on the right", line)
+	}
+
+	// A newer release is named beside it when there is room.
+	m.newerVersion = "v0.4.0"
+	line = ansi.Strip(m.headerLine(28))
+	if !strings.Contains(line, "v0.3.0") || !strings.Contains(line, "↑v0.4.0") {
+		t.Errorf("header = %q, want both versions", line)
+	}
+
+	// Where there is not, the build berth is on wins: it matters more than the
+	// one it could be on.
+	line = ansi.Strip(m.headerLine(18))
+	if !strings.Contains(line, "v0.3.0") {
+		t.Errorf("narrow header = %q, want the current version kept", line)
+	}
+	if strings.Contains(line, "↑") {
+		t.Errorf("narrow header = %q, want the notice dropped", line)
+	}
+
+	// And a header with room for neither still fits its column.
+	for _, w := range []int{16, 12, 8, 4} {
+		if got := ansi.StringWidth(m.headerLine(w)); got > w {
+			t.Errorf("header at %d is %d cells", w, got)
+		}
+	}
+}

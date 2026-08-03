@@ -71,12 +71,57 @@ func run(addr, token string) error {
 	})
 
 	server := &http.Server{
-		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	log.Printf("serving the clipboard on http://%s (%s)", addr, runtime.GOOS)
-	return server.ListenAndServe()
+
+	listeners, err := listenLoopback(addr)
+	if err != nil {
+		return err
+	}
+	errs := make(chan error, len(listeners))
+	for _, ln := range listeners {
+		log.Printf("serving the clipboard on http://%s (%s)", ln.Addr(), runtime.GOOS)
+		go func(ln net.Listener) { errs <- server.Serve(ln) }(ln)
+	}
+	return <-errs
+}
+
+// listenLoopback opens the listening sockets.
+//
+// A loopback address gets both families, because "ssh -R 8377:localhost:8377"
+// resolves localhost on the machine running ssh, and on some systems that is
+// ::1 first. Binding only 127.0.0.1 there leaves the tunnel forwarding to a
+// port nothing is on, which surfaces at the far end as an agent that accepts
+// the connection and then says nothing at all - the confusing failure this
+// exists to prevent. Both are still loopback, so nothing new is exposed.
+// Anything else binds exactly as written.
+func listenLoopback(addr string) ([]net.Listener, error) {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if !isLoopback(addr) {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		return []net.Listener{ln}, nil
+	}
+
+	var listeners []net.Listener
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, port))
+		if err != nil {
+			// A machine with IPv6 switched off should still serve on IPv4.
+			continue
+		}
+		listeners = append(listeners, ln)
+	}
+	if len(listeners) == 0 {
+		return nil, fmt.Errorf("could not listen on either loopback address at port %s", port)
+	}
+	return listeners, nil
 }
 
 func serveImage(w http.ResponseWriter, r *http.Request, token string) {

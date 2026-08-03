@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,5 +123,69 @@ func TestPowershellScriptCoversImagesAndCopiedFiles(t *testing.T) {
 		if !strings.Contains(powershellScript, want) {
 			t.Errorf("the clipboard script no longer mentions %q", want)
 		}
+	}
+}
+
+// The tunnel this agent lives behind is written "ssh -R 8377:localhost:8377",
+// and localhost resolves on the machine running ssh - which on some systems is
+// ::1 first. Serving only IPv4 there produces a tunnel that connects and then
+// returns nothing, which looks like a broken agent rather than a missed
+// address family.
+func TestLoopbackListensOnBothFamilies(t *testing.T) {
+	listeners, err := listenLoopback("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listenLoopback: %v", err)
+	}
+	defer func() {
+		for _, ln := range listeners {
+			ln.Close()
+		}
+	}()
+
+	var v4, v6 bool
+	for _, ln := range listeners {
+		host, _, err := net.SplitHostPort(ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			t.Errorf("listening on %s, which is not loopback", ln.Addr())
+		}
+		if ip.To4() != nil {
+			v4 = true
+		} else {
+			v6 = true
+		}
+	}
+	if !v4 {
+		t.Error("no IPv4 loopback listener")
+	}
+	// A machine with IPv6 off is legitimate, so this is reported, not failed.
+	if !v6 {
+		t.Log("no IPv6 loopback listener; this host appears to have IPv6 disabled")
+	}
+}
+
+// An address that is not loopback is bound exactly as asked, so -addr with a
+// token still means what it says.
+func TestNonLoopbackBindsExactlyOnce(t *testing.T) {
+	listeners, err := listenLoopback("0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listenLoopback: %v", err)
+	}
+	defer func() {
+		for _, ln := range listeners {
+			ln.Close()
+		}
+	}()
+	if len(listeners) != 1 {
+		t.Errorf("got %d listeners for an explicit address, want 1", len(listeners))
+	}
+}
+
+func TestListenLoopbackRejectsRubbish(t *testing.T) {
+	if _, err := listenLoopback("no-port-here"); err == nil {
+		t.Error("want an error for an address with no port")
 	}
 }

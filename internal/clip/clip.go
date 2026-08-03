@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -153,6 +154,27 @@ func fromClipboard(cacheDir string) (string, error) {
 }
 
 // diagnose turns a clipboard tool's failure into something actionable.
+// agentReachError explains why the agent could not be reached, which over an
+// ssh -R tunnel is two quite different problems wearing the same coat.
+//
+// Refused means nothing is listening on this end: no tunnel. An empty reply
+// means the tunnel accepted the connection and found nothing on the far end:
+// the agent is not running on the machine you are sitting at. Telling someone
+// to check the tunnel when the tunnel is fine sends them the wrong way.
+func agentReachError(url string, err error) error {
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return fmt.Errorf("nothing is listening at %s - is the ssh -R tunnel up?", url)
+	case errors.Is(err, io.EOF):
+		return fmt.Errorf("the tunnel to %s is open but berth-clipd is not running "+
+			"on the machine at the other end", url)
+	case os.IsTimeout(err):
+		return fmt.Errorf("the clipboard agent at %s did not answer in time", url)
+	default:
+		return fmt.Errorf("clipboard agent unreachable at %s: %w", url, err)
+	}
+}
+
 func diagnose(tool string, err error) string {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
@@ -339,9 +361,7 @@ func fromAgent(o Options) (string, error) {
 	client := &http.Client{Timeout: agentTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		// The overwhelmingly common case is that the tunnel is not up, and
-		// "connection refused" on its own explains nothing.
-		return "", fmt.Errorf("clipboard agent unreachable at %s (is the ssh -R tunnel up?)", o.AgentURL)
+		return "", agentReachError(o.AgentURL, err)
 	}
 	defer resp.Body.Close()
 

@@ -283,3 +283,61 @@ func TestCycleColor(t *testing.T) {
 		t.Error("cycling back from the default did not wrap")
 	}
 }
+
+// Closing the preset list has to go back where it was opened from. Reached
+// from the new session form, dropping to the session list would throw away a
+// half-filled form.
+func TestClosingPresetsReturnsWhereItCameFrom(t *testing.T) {
+	m := presetModel(t)
+	m.presets = []config.Preset{{Label: "api", Kind: tmux.KindCodex}}
+
+	// From the session list.
+	m.Update(keyRune('p'))
+	m.Update(keyType(tea_KeyEsc))
+	if m.mode != modeNormal {
+		t.Errorf("mode = %v, want the session list", m.mode)
+	}
+
+	// From the new session form.
+	m.Update(keyRune('n'))
+	m.nameInput.SetValue("half-typed")
+	m.formField = fieldPreset
+	m.Update(keyType(tea_KeyEnter))
+	if m.mode != modePresets {
+		t.Fatal("the form did not open the preset list")
+	}
+	m.Update(keyType(tea_KeyEsc))
+	if m.mode != modeNew {
+		t.Fatalf("mode = %v, want the form back", m.mode)
+	}
+	if m.nameInput.Value() != "half-typed" {
+		t.Errorf("the form lost what was typed: %q", m.nameInput.Value())
+	}
+
+	// And "q", which also closes the list.
+	m.formField = fieldPreset
+	m.Update(keyType(tea_KeyEnter))
+	m.Update(keyRune('q'))
+	if m.mode != modeNew {
+		t.Errorf("q from the form dropped to %v", m.mode)
+	}
+}
+
+// Removing the last preset closes the list, and that too should land where it
+// came from.
+func TestRemovingTheLastPresetFromTheFormReturnsToIt(t *testing.T) {
+	m := presetModel(t)
+	m.presets = []config.Preset{{Label: "only", Kind: tmux.KindClaude}}
+
+	m.Update(keyRune('n'))
+	m.formField = fieldPreset
+	m.Update(keyType(tea_KeyEnter))
+	m.Update(keyRune('x'))
+
+	if len(m.presets) != 0 {
+		t.Fatalf("presets = %+v, want it removed", m.presets)
+	}
+	if m.mode != modeNew {
+		t.Errorf("mode = %v, want the form back", m.mode)
+	}
+}

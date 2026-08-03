@@ -29,12 +29,15 @@ func presetFrom(s tmux.Session, label string) config.Preset {
 	}
 }
 
-// openPresets shows the saved presets.
+// openPresets shows the saved presets, remembering what it was opened from:
+// reached from the new session form, closing it belongs back in the form
+// rather than dropping the half-filled session on the floor.
 func (m *Model) openPresets() tea.Cmd {
 	if len(m.presets) == 0 {
 		m.setStatus("no presets yet - P saves the selected session as one", false)
 		return nil
 	}
+	m.presetReturn = m.mode
 	m.mode = modePresets
 	if m.presetCursor >= len(m.presets) {
 		m.presetCursor = len(m.presets) - 1
@@ -60,8 +63,7 @@ func (m *Model) openSavePreset() tea.Cmd {
 func (m *Model) handlePresetsKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "q", "p":
-		m.mode = modeNormal
-		return nil
+		return m.closePresets()
 
 	case "up", "k", "ctrl+p":
 		m.movePreset(-1)
@@ -78,6 +80,18 @@ func (m *Model) handlePresetsKey(msg tea.KeyMsg) tea.Cmd {
 	case "x", "d":
 		return m.deletePreset()
 	}
+	return nil
+}
+
+// closePresets goes back to whatever opened the list.
+func (m *Model) closePresets() tea.Cmd {
+	m.mode = m.presetReturn
+	if m.mode == modeNew {
+		// The form was left mid-edit; put the keyboard back where it was.
+		m.syncFormFocus()
+		return textinput.Blink
+	}
+	m.mode = modeNormal
 	return nil
 }
 
@@ -146,7 +160,7 @@ func (m *Model) deletePreset() tea.Cmd {
 	}
 	m.setStatus("removed preset "+gone, false)
 	if len(m.presets) == 0 {
-		m.mode = modeNormal
+		return m.closePresets()
 	}
 	return nil
 }

@@ -152,6 +152,9 @@ type Model struct {
 	// config.
 	presets      []config.Preset
 	presetCursor int
+	// presetReturn is the screen the preset list was opened from, so closing
+	// it goes back there rather than always to the session list.
+	presetReturn uiMode
 	// colorCursor is the palette entry highlighted while choosing a colour.
 	colorCursor int
 	// newerVersion is the tag of a release newer than this build, once the

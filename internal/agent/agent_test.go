@@ -1,0 +1,222 @@
+package agent
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/dpws/berth/internal/tmux"
+)
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// statusFile writes the file Claude Code keeps for a running process.
+func statusFile(t *testing.T, root string, pid int, sessionID, cwd, status string, age time.Duration) {
+	t.Helper()
+	ms := time.Now().Add(-age).UnixMilli()
+	writeFile(t, filepath.Join(root, "sessions", fmt.Sprintf("%d.json", pid)), fmt.Sprintf(
+		`{"pid":%d,"sessionId":%q,"cwd":%q,"status":%q,"updatedAt":%d,"statusUpdatedAt":%d}`,
+		pid, sessionID, cwd, status, ms, ms))
+}
+
+func transcriptFile(t *testing.T, root, sessionID string, lines ...string) {
+	t.Helper()
+	body := ""
+	for _, l := range lines {
+		body += l + "\n"
+	}
+	writeFile(t, filepath.Join(root, "projects", "-proj", sessionID+".jsonl"), body)
+}
+
+func TestClaudeStatusAndTask(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 4242, "sess-a", "/work/api", "busy", 0)
+	transcriptFile(t, root, "sess-a",
+		`{"type":"ai-title","aiTitle":"Add token limits"}`,
+		`{"type":"last-prompt","lastPrompt":"add a quit hotkey"}`,
+		`{"type":"last-prompt","lastPrompt":"now update the tab title"}`)
+
+	w := newClaudeWatcher(root)
+	out := map[string]Info{}
+	w.refresh([]tmux.Session{{Name: "api", PanePID: 4242, Dir: "/work/api"}}, out)
+
+	got := out["api"]
+	if got.Status != Busy {
+		t.Errorf("Status = %q, want busy", got.Status)
+	}
+	// The latest prompt wins: a session moves on to new work, and the title is
+	// only ever written from the opening request.
+	if got.Task != "now update the tab title" {
+		t.Errorf("Task = %q, want the most recent prompt", got.Task)
+	}
+}
+
+func TestClaudeFallsBackToAITitle(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 7, "sess-b", "/work/x", "idle", 0)
+	transcriptFile(t, root, "sess-b", `{"type":"ai-title","aiTitle":"Rewrite the installer"}`)
+
+	out := map[string]Info{}
+	newClaudeWatcher(root).refresh([]tmux.Session{{Name: "x", PanePID: 7}}, out)
+
+	if got := out["x"].Task; got != "Rewrite the installer" {
+		t.Errorf("Task = %q, want the title when no prompt was recorded", got)
+	}
+}
+
+// Claude started from a shell inside the pane is not the pane's own process,
+// so the working directory is the fallback link.
+func TestClaudeMatchesByDirectoryWhenPIDDiffers(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 999, "sess-c", "/work/api", "waiting", 0)
+	transcriptFile(t, root, "sess-c", `{"type":"last-prompt","lastPrompt":"ship it"}`)
+
+	out := map[string]Info{}
+	newClaudeWatcher(root).refresh(
+		[]tmux.Session{{Name: "api", PanePID: 12345, Dir: "/work/api"}}, out)
+
+	if got := out["api"].Status; got != Waiting {
+		t.Errorf("Status = %q, want waiting", got)
+	}
+}
+
+// A killed agent leaves its file behind saying "busy". Believing that forever
+// would show a dead session as working.
+func TestClaudeIgnoresStaleStatusFiles(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 4242, "sess-d", "/work/api", "busy", staleAfter+time.Minute)
+
+	out := map[string]Info{}
+	newClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+
+	if _, ok := out["api"]; ok {
+		t.Errorf("a stale status file was reported: %+v", out["api"])
+	}
+}
+
+func TestClaudeTaskFollowsNewPrompts(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 5, "sess-e", "/w", "busy", 0)
+	path := filepath.Join(root, "projects", "-proj", "sess-e.jsonl")
+	transcriptFile(t, root, "sess-e", `{"type":"last-prompt","lastPrompt":"first task"}`)
+
+	w := newClaudeWatcher(root)
+	sessions := []tmux.Session{{Name: "s", PanePID: 5}}
+	out := map[string]Info{}
+	w.refresh(sessions, out)
+	if got := out["s"].Task; got != "first task" {
+		t.Fatalf("Task = %q, want %q", got, "first task")
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"last-prompt","lastPrompt":"second task"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	out = map[string]Info{}
+	w.refresh(sessions, out)
+	if got := out["s"].Task; got != "second task" {
+		t.Errorf("Task = %q, want it to follow the new prompt", got)
+	}
+}
+
+// codexEvent builds one rollout line.
+func codexEvent(ts, payload string) string {
+	return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":%s}`, ts, payload)
+}
+
+func TestCodexTracksTurnsAndPrompts(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "r.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
+			codexEvent("2026-08-03T10:00:00Z", `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
+			codexEvent("2026-08-03T10:00:01Z", `{"type":"task_started"}`)+"\n")
+
+	w := newCodexWatcher(root)
+	sessions := []tmux.Session{{Name: "web", Dir: "/work/web"}}
+	out := map[string]Info{}
+	w.refresh(sessions, out)
+
+	if got := out["web"]; got.Status != Busy || got.Task != "fix the retry backoff" {
+		t.Errorf("got %+v, want busy with the prompt as the task", got)
+	}
+
+	// The turn finishing flips it back to idle.
+	writeFile(t, filepath.Join(root, "r.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
+			codexEvent("2026-08-03T10:00:00Z", `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
+			codexEvent("2026-08-03T10:00:01Z", `{"type":"task_started"}`)+"\n"+
+			codexEvent("2026-08-03T10:00:09Z", `{"type":"task_complete"}`)+"\n")
+
+	out = map[string]Info{}
+	w.refresh(sessions, out)
+	if got := out["web"].Status; got != Idle {
+		t.Errorf("Status = %q, want idle after task_complete", got)
+	}
+}
+
+func TestCodexIgnoresOtherDirectories(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "r.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/somewhere/else"}}`+"\n")
+
+	out := map[string]Info{}
+	newCodexWatcher(root).refresh([]tmux.Session{{Name: "web", Dir: "/work/web"}}, out)
+	if _, ok := out["web"]; ok {
+		t.Error("a rollout from another directory was matched")
+	}
+}
+
+func TestCleanTask(t *testing.T) {
+	cases := map[string]string{
+		"  hello   world  ":     "hello world",
+		"line one\nline two":    "line one line two",
+		"tabs\there":            "tabs here",
+		"bell\x07and\x1bescape": "bellandescape",
+		"":                      "",
+		"\n\n":                  "",
+	}
+	for in, want := range cases {
+		if got := cleanTask(in); got != want {
+			t.Errorf("cleanTask(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAnyWaiting(t *testing.T) {
+	infos := map[string]Info{
+		"a": {Status: Busy},
+		"b": {Status: Waiting},
+		"c": {Status: Idle},
+		"d": {Status: Waiting},
+	}
+	if got := AnyWaiting(infos); got != 2 {
+		t.Errorf("AnyWaiting = %d, want 2", got)
+	}
+	if got := AnyWaiting(nil); got != 0 {
+		t.Errorf("AnyWaiting(nil) = %d, want 0", got)
+	}
+}
+
+func TestStatusPredicates(t *testing.T) {
+	if !Waiting.NeedsInput() || Busy.NeedsInput() || Idle.NeedsInput() {
+		t.Error("NeedsInput should be true only for waiting")
+	}
+	if !Busy.Active() || !Shell.Active() || Idle.Active() || Waiting.Active() {
+		t.Error("Active should be true only while the agent is doing work")
+	}
+}

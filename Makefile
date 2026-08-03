@@ -36,7 +36,7 @@ clipd-darwin:
 bundle-windows: clipd-windows clipd-windows-gui
 	mkdir -p dist/windows
 	cp dist/berth-clipd.exe dist/berth-clipd-silent.exe dist/windows/
-	cp scripts/install-clipd.ps1 dist/windows/
+	cp install.ps1 dist/windows/
 	cp cmd/berth-clipd/README.md dist/windows/
 	@command -v zip >/dev/null && cd dist && zip -qr berth-clipd-windows.zip windows || true
 	@echo "bundle ready: dist/windows/ (copy it to the Windows machine)"

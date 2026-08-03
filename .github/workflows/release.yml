@@ -1,0 +1,112 @@
+name: release
+
+# Publishes binaries when a version tag is pushed:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# install.sh and install.ps1 download from whatever this produces, so the
+# archive names here and the names those scripts build must stay in step.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: version
+        run: echo "version=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux
+          go vet ./...
+          go test ./...
+
+      # Everything is pure Go, so one runner cross-compiles the whole matrix.
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p dist
+          LDFLAGS="-s -w -X main.version=$VERSION"
+
+          # berth needs a pty and tmux, so it ships for unix only.
+          for target in linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            work=$(mktemp -d)
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
+              go build -ldflags "$LDFLAGS" -o "$work/berth" .
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
+              go build -ldflags "$LDFLAGS" -o "$work/berth-clipd" ./cmd/berth-clipd
+            cp README.md "$work/"
+            [ -f LICENSE ] && cp LICENSE "$work/" || true
+            tar -czf "dist/berth_${VERSION}_${os}_${arch}.tar.gz" -C "$work" .
+            rm -rf "$work"
+          done
+
+          # On Windows only the clipboard agent makes sense.
+          for arch in amd64 arm64; do
+            work=$(mktemp -d)
+            GOOS=windows GOARCH=$arch CGO_ENABLED=0 \
+              go build -ldflags "$LDFLAGS" -o "$work/berth-clipd.exe" ./cmd/berth-clipd
+            GOOS=windows GOARCH=$arch CGO_ENABLED=0 \
+              go build -ldflags "-H=windowsgui $LDFLAGS" \
+              -o "$work/berth-clipd-silent.exe" ./cmd/berth-clipd
+            cp cmd/berth-clipd/README.md "$work/"
+            cp install.ps1 "$work/"
+            (cd "$work" && zip -qr "berth-clipd_${VERSION}_windows_${arch}.zip" .)
+            mv "$work/berth-clipd_${VERSION}_windows_${arch}.zip" dist/
+            rm -rf "$work"
+          done
+
+          cd dist && sha256sum ./* > checksums.txt && cat checksums.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --title "$VERSION" \
+            --generate-notes \
+            --notes "
+          ## Install
+
+          **Linux / macOS**
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+          \`\`\`
+
+          **Windows** (installs \`berth-clipd\`, the clipboard agent - berth
+          itself needs a pty and tmux)
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex
+          \`\`\`
+
+          **Go**
+          \`\`\`sh
+          go install github.com/${{ github.repository }}@$VERSION
+          \`\`\`
+          "

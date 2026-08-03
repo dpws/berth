@@ -130,6 +130,6 @@ echo "Run 'berth' to start, or 'berth ls' to list sessions."
 if [ "$WITH_CLIPD" -eq 0 ]; then
 	echo
 	echo "To paste images from another machine's clipboard, build the agent for it:"
-	echo "  make clipd-windows    # then scripts/install-clipd.ps1 over there"
+	echo "  make clipd-windows    # then install.ps1 over there"
 	echo "  make clipd-darwin"
 fi

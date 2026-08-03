@@ -1,5 +1,9 @@
 # berth
 
+[![tests](https://github.com/dpws/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/dpws/berth/actions/workflows/ci.yml)
+[![release](https://github.com/dpws/berth/actions/workflows/release.yml/badge.svg)](https://github.com/dpws/berth/actions/workflows/release.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dpws/berth.svg)](https://pkg.go.dev/github.com/dpws/berth)
+
 A terminal UI for juggling Claude Code, Codex and plain shell sessions. tmux
 does the heavy lifting underneath; berth gives it a session list on the left
 and the selected session's **live terminal** on the rest of the screen.
@@ -8,15 +12,15 @@ Every session gets a berth: a slot in the list you can dock into and leave
 again, still running when you come back.
 
 ```
-┌──────────────┬────────────────────────────────────┐
-│ BERTH 3  │ dpws@host:~/code/api $ claude      │
-│──────────────│ ❯ refactor the request parser      │
-│▸ ● api  claude│                                   │
-│  ○ web  claude│ (live — type straight into it)    │
-│  ○ dots  bash │                                   │
-│──────────────│                                    │
-│ n new  x kill│                                    │
-└──────────────┴────────────────────────────────────┘
+┌──────────────────┬─────────────────────────────────────┐
+│ BERTH 3          │ dpws@host:~/code/api $ claude       │
+│──────────────────│ ❯ refactor the request parser       │
+│▸ ● api    claude │                                     │
+│  ○ web    codex  │ (live - type straight into it)      │
+│  ○ dots   bash   │                                     │
+│──────────────────│                                     │
+│ n new  x kill    │                                     │
+└──────────────────┴─────────────────────────────────────┘
  ctrl+o back to list  ·  keys go to api
 ```
 
@@ -25,25 +29,42 @@ sessions, reachable with `tmux attach` like any other.
 
 ## Install
 
-Requires Go 1.24+ and tmux 3.0+.
+**Linux and macOS**
 
 ```sh
-make build            # ./berth
-make install          # build, then install to ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/dpws/berth/main/install.sh | sh
+```
+
+**Windows** — berth needs a pty and tmux, so it does not run there. What does
+is `berth-clipd`, the clipboard agent that lets `ctrl+y` on the remote machine
+paste a screenshot from this one:
+
+```powershell
+irm https://raw.githubusercontent.com/dpws/berth/main/install.ps1 | iex
+```
+
+**Go**
+
+```sh
+go install github.com/dpws/berth@latest
+```
+
+The shell installer takes `VERSION`, `BERTH_INSTALL_DIR`, `BERTH_CLIPD=1` to
+add the agent locally, and `BERTH_DRY_RUN=1` to see what it would do. It
+verifies the release checksum, never uses sudo, and writes only to the target
+directory. Read it first if you would rather not pipe a script into a shell —
+it is short, and `sh install.sh` works just as well after downloading.
+
+### From source
+
+```sh
+make build && make install         # to ~/.local/bin
+sudo make install PREFIX=/usr/local
 make uninstall
 ```
 
-Or the script, if you would rather not have make involved:
-
-```sh
-./scripts/install.sh                      # to ~/.local/bin
-./scripts/install.sh --prefix /usr/local  # system-wide, needs sudo
-./scripts/install.sh --with-clipd         # also the clipboard agent
-./scripts/install.sh --uninstall
-```
-
-Both honour `PREFIX`, check for Go and tmux first, and tell you if the target
-directory is not on your `PATH`.
+Or `./scripts/install-from-source.sh`, which does the same without make.
+Requires Go 1.24+ and tmux 3.0+.
 
 ## Use
 

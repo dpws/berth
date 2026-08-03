@@ -20,6 +20,8 @@ type Preset struct {
 	Session string `json:"session,omitempty"`
 	Kind    string `json:"kind"`
 	Dir     string `json:"dir,omitempty"`
+	// Color is a name from berth's palette, applied to the session it starts.
+	Color string `json:"color,omitempty"`
 	// Start is new, continue or resume; empty means new.
 	Start string `json:"start,omitempty"`
 }

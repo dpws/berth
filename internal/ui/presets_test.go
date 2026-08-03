@@ -2,6 +2,7 @@ package ui
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dpws/berth/internal/config"
@@ -203,5 +204,82 @@ func TestMissingPresetsFileIsNotAnError(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("got %+v, want nothing", got)
+	}
+}
+
+func TestFormCarriesColourAndPresetIntoTheSession(t *testing.T) {
+	m := presetModel(t)
+	m.Update(keyRune('n'))
+
+	m.formField = fieldColor
+	m.Update(keyType(tea_KeyRight))
+	if m.newColor == "" {
+		t.Fatal("the colour row did not move off the default")
+	}
+	m.formField = fieldSavePreset
+	m.Update(keyType(tea_KeyEnter))
+	if !m.newSavePreset {
+		t.Fatal("enter did not tick save-as-preset")
+	}
+
+	// Creating carries both through, and the preset is remembered on the
+	// update loop rather than from the command that made the session.
+	m.Update(sessionCreatedMsg{
+		name: "api",
+		preset: &config.Preset{
+			Label: "api", Session: "api", Kind: tmux.KindClaude, Color: "red",
+		},
+	})
+	if len(m.presets) != 1 || m.presets[0].Color != "red" {
+		t.Errorf("presets = %+v, want the colour kept", m.presets)
+	}
+	if !strings.Contains(m.status, "preset") {
+		t.Errorf("status = %q, want it to mention the preset", m.status)
+	}
+
+	onDisk, _ := config.LoadPresets()
+	if len(onDisk) != 1 {
+		t.Errorf("on disk = %+v, want the preset saved", onDisk)
+	}
+}
+
+// The form is a way into the presets as well as a way past them.
+func TestFormOpensThePresetList(t *testing.T) {
+	m := presetModel(t)
+	m.presets = []config.Preset{{Label: "api", Kind: tmux.KindCodex, Color: "teal"}}
+	m.Update(keyRune('n'))
+
+	m.formField = fieldPreset
+	m.Update(keyType(tea_KeyEnter))
+	if m.mode != modePresets {
+		t.Fatalf("mode = %v, want the preset list", m.mode)
+	}
+
+	// Choosing one comes back to the form with its colour in place.
+	m.Update(keyType(tea_KeyEnter))
+	if m.mode != modeNew {
+		t.Fatalf("mode = %v, want the form again", m.mode)
+	}
+	if m.newColor != "teal" {
+		t.Errorf("colour = %q, want the preset's", m.newColor)
+	}
+	if m.newSavePreset {
+		t.Error("a session started from a preset defaults to saving another")
+	}
+}
+
+func TestCycleColor(t *testing.T) {
+	// Forward from no colour, and back to it.
+	first := cycleColor("", 1)
+	if first == "" || first == "default" {
+		t.Fatalf("cycleColor forward gave %q", first)
+	}
+	if got := cycleColor(first, -1); got != "" {
+		t.Errorf("cycling back gave %q, want no colour", got)
+	}
+	// Wraps rather than running off the end.
+	last := cycleColor("", -1)
+	if last == "" {
+		t.Error("cycling back from the default did not wrap")
 	}
 }

@@ -13,6 +13,7 @@ const (
 	tea_KeyTab   = tea.KeyTab
 	tea_KeyEnter = tea.KeyEnter
 	tea_KeyEsc   = tea.KeyEsc
+	tea_KeyRight = tea.KeyRight
 )
 
 func keyRune(r rune) tea.KeyMsg        { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }

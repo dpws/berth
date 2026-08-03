@@ -66,6 +66,35 @@ func workingColor(s tmux.Session) lipgloss.TerminalColor {
 	return colSuccess
 }
 
+// cycleColor steps through the palette, wrapping in either direction. The
+// empty string is the entry that means "no colour of its own".
+func cycleColor(name string, delta int) string {
+	at := 0
+	for i, c := range sessionColors {
+		if c.name == name {
+			at = i
+		}
+	}
+	next := sessionColors[(at+delta+len(sessionColors))%len(sessionColors)].name
+	if next == "default" {
+		return ""
+	}
+	return next
+}
+
+// colorChip renders a colour as a swatch and its name, for a form row that has
+// no space for the whole palette.
+func colorChip(name string) string {
+	if name == "" {
+		return itemMutedStyle.Render("── default")
+	}
+	c, ok := colorNamed(name)
+	if !ok {
+		return itemMutedStyle.Render("── " + name)
+	}
+	return lipgloss.NewStyle().Foreground(c).Render("●● " + name)
+}
+
 // openColors shows the palette for the selected session.
 func (m *Model) openColors() tea.Cmd {
 	s, ok := m.selected()

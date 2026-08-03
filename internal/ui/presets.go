@@ -24,6 +24,7 @@ func presetFrom(s tmux.Session, label string) config.Preset {
 		Session: s.Name,
 		Kind:    s.DetectedKind(),
 		Dir:     s.Dir,
+		Color:   s.Color,
 		Start:   tmux.StartNew,
 	}
 }
@@ -111,6 +112,9 @@ func (m *Model) usedPreset() tea.Cmd {
 	if m.newStart == "" {
 		m.newStart = tmux.StartNew
 	}
+
+	m.newColor = p.Color
+	m.newSavePreset = false
 
 	m.nameInput.SetValue(p.Session)
 	m.nameInput.CursorEnd()

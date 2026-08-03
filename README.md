@@ -190,8 +190,10 @@ limit block is re-read.
 
 ## Starting and resuming sessions
 
-`n` opens the new session form: a name, a kind, how it should start, and a
-directory.
+`n` opens the new session form: a name, a kind, how it should start, a colour,
+and a directory. The first row is a way *into* the presets — enter on it lists
+what you have saved and fills the rest of the form from one — and the last is a
+tick that saves the session you are about to create as a preset of its own.
 
 **Start mode** decides whether an agent begins fresh or picks up where it left
 off. `new` is a clean start; `continue` carries on the most recent conversation
@@ -249,8 +251,9 @@ have saved:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Choosing one opens the new session form already filled in, rather than starting
-it outright: the preset saves the typing, not the last look before something
+Presets carry a colour too, so a session started from one arrives already
+marked. Choosing one opens the new session form already filled in, rather than
+starting it outright: the preset saves the typing, not the last look before something
 runs. So you can still change the start mode, point it at a different
 directory, or rename it before pressing enter. `x` removes one.
 

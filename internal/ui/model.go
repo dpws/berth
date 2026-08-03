@@ -86,6 +86,10 @@ type Model struct {
 	nameInput textinput.Model
 	dirInput  textinput.Model
 	newStart  string
+	// newColor is the palette name a session will be created with, and
+	// newSavePreset whether creating it should also save a preset.
+	newColor      string
+	newSavePreset bool
 	// dirMatches is what the directory field would complete to, shown under it
 	// so tab is not a guess in the dark.
 	dirMatches []string
@@ -248,6 +252,15 @@ type attachMsg struct {
 }
 
 type paneMsg struct{ pane *term.Pane }
+
+// sessionCreatedMsg carries the result of creating a session back to the
+// update loop, since what follows - remembering a preset - is model state and
+// has no business being touched from a command's goroutine.
+type sessionCreatedMsg struct {
+	name   string
+	preset *config.Preset
+	err    error
+}
 
 // imagePasteMsg carries the result of looking for an image to hand to the
 // focused session. The lookup shells out, so it runs as a command.
@@ -462,6 +475,27 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case errMsg:
 		m.setStatus(msg.err.Error(), true)
 		return nil
+
+	case sessionCreatedMsg:
+		if msg.err != nil {
+			m.setStatus(msg.err.Error(), true)
+			m.selectName = msg.name
+			return listSessions()
+		}
+		text := "created " + msg.name
+		if msg.preset != nil {
+			m.presets = config.AddPreset(m.presets, *msg.preset)
+			if err := config.SavePresets(m.presets); err != nil {
+				m.setStatus("created "+msg.name+", but the preset did not save: "+
+					err.Error(), true)
+				m.selectName = msg.name
+				return listSessions()
+			}
+			text += ", saved as a preset"
+		}
+		m.setStatus(text, false)
+		m.selectName = msg.name
+		return listSessions()
 
 	case statusMsg:
 		m.setStatus(msg.text, msg.isErr)
@@ -774,6 +808,8 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 		m.formField = fieldName
 		m.dirMatches = nil
 		m.newStart = tmux.StartNew
+		m.newColor = ""
+		m.newSavePreset = false
 		m.newKind = tmux.KindClaude
 		m.nameInput.SetValue("")
 		m.dirInput.SetValue(defaultDirValue(m.cfg.DefaultDir))
@@ -872,9 +908,30 @@ func (m *Model) handleNewKey(msg tea.KeyMsg) tea.Cmd {
 		case fieldStart:
 			m.newStart = cycleStart(m.newStart, -1)
 			return nil
+		case fieldColor:
+			m.newColor = cycleColor(m.newColor, -1)
+			return nil
 		}
 
-	case "right", " ":
+	case "right":
+		switch m.formField {
+		case fieldPreset:
+			return m.openPresets()
+		case fieldKind:
+			m.newKind = cycleKind(m.newKind, 1)
+			return nil
+		case fieldStart:
+			m.newStart = cycleStart(m.newStart, 1)
+			return nil
+		case fieldColor:
+			m.newColor = cycleColor(m.newColor, 1)
+			return nil
+		case fieldSavePreset:
+			m.newSavePreset = !m.newSavePreset
+			return nil
+		}
+
+	case " ":
 		switch m.formField {
 		case fieldKind:
 			m.newKind = cycleKind(m.newKind, 1)
@@ -882,9 +939,25 @@ func (m *Model) handleNewKey(msg tea.KeyMsg) tea.Cmd {
 		case fieldStart:
 			m.newStart = cycleStart(m.newStart, 1)
 			return nil
+		case fieldColor:
+			m.newColor = cycleColor(m.newColor, 1)
+			return nil
+		case fieldSavePreset, fieldPreset:
+			if m.formField == fieldSavePreset {
+				m.newSavePreset = !m.newSavePreset
+				return nil
+			}
+			return m.openPresets()
 		}
 
 	case "enter":
+		switch m.formField {
+		case fieldPreset:
+			return m.openPresets()
+		case fieldSavePreset:
+			m.newSavePreset = !m.newSavePreset
+			return nil
+		}
 		return m.createSession()
 	}
 
@@ -1028,6 +1101,9 @@ func (m *Model) createSession() tea.Cmd {
 	}
 
 	command := m.commandFor(kind, m.newStart)
+	color, start, savePreset := m.newColor, m.newStart, m.newSavePreset
+	opts := m.cfg.SessionOptions
+	hideStatus := m.cfg.HideStatusBar
 
 	m.mode = modeNormal
 	m.nameInput.Blur()
@@ -1042,13 +1118,28 @@ func (m *Model) createSession() tea.Cmd {
 			Dir:           dir,
 			Kind:          kind,
 			Command:       command,
-			HideStatusBar: m.cfg.HideStatusBar,
-			Options:       m.cfg.SessionOptions,
+			HideStatusBar: hideStatus,
+			Options:       opts,
 		})
 		if err != nil {
-			return statusMsg{text: err.Error(), isErr: true, selectName: created}
+			return sessionCreatedMsg{name: created, err: err}
 		}
-		return statusMsg{text: "created " + created, selectName: created}
+		if color != "" {
+			// A colour that will not stick is not worth losing the session
+			// over, so it is reported rather than raised.
+			if err := tmux.SetColor(created, color); err != nil {
+				return sessionCreatedMsg{name: created, err: err}
+			}
+		}
+
+		msg := sessionCreatedMsg{name: created}
+		if savePreset {
+			msg.preset = &config.Preset{
+				Label: created, Session: created, Kind: kind,
+				Dir: dir, Color: color, Start: start,
+			}
+		}
+		return msg
 	}
 }
 
@@ -1665,17 +1756,37 @@ func (m *Model) newDialog() string {
 		start = faintStyle.Render("only for agents")
 	}
 
+	from := faintStyle.Render("no presets saved yet")
+	if len(m.presets) > 0 {
+		from = itemMutedStyle.Render(fmt.Sprintf("choose one of %d →", len(m.presets)))
+		if m.formField == fieldPreset {
+			from = labelActiveStyle.Render(fmt.Sprintf("choose one of %d →", len(m.presets)))
+		}
+	}
+
+	tick := "[ ]"
+	if m.newSavePreset {
+		tick = "[✓]"
+	}
+
 	rows := []string{
 		titleStyle.Render("New session"),
+		"",
+		label(fieldPreset, "from ") + "  " + from,
 		"",
 		label(fieldName, "name ") + "  " + m.nameInput.View(),
 		label(fieldKind, "kind ") + "  " + chips(tmux.Kinds, m.newKind),
 		label(fieldStart, "start") + "  " + start,
+		label(fieldColor, "color") + "  " + colorChip(m.newColor),
 		label(fieldDir, "dir  ") + "  " + m.dirInput.View(),
 	}
 	if hint := m.dirHint(); hint != "" {
 		rows = append(rows, "         "+hint)
 	}
+	rows = append(rows,
+		"",
+		label(fieldSavePreset, "     ")+"  "+tick+" save as a preset",
+	)
 	return strings.Join(append(rows,
 		"",
 		footerStyle.Render("tab complete dir · ↑/↓ switch · ←/→ choose · enter create · esc cancel"),
@@ -1810,10 +1921,15 @@ func defaultName(kind, dir string) string {
 
 // The fields of the new session form, in the order they are shown.
 const (
-	fieldName = iota
+	// fieldPreset is a way in rather than a value: it opens the saved presets
+	// and fills the rest of the form from one.
+	fieldPreset = iota
+	fieldName
 	fieldKind
 	fieldStart
+	fieldColor
 	fieldDir
+	fieldSavePreset
 	formFields
 )
 

@@ -156,13 +156,20 @@ func (p *Pane) Resize(w, h int) {
 	p.notify()
 }
 
-// SendKey forwards a key press to the session.
+// SendKey forwards a key press to the session. A special key held with a
+// modifier is encoded here rather than by the emulator, which has no table
+// entry for one and would drop it; both paths end up on the same pipe, so the
+// order input arrives in is unchanged.
 func (p *Pane) SendKey(key uv.KeyPressEvent) {
 	if p.Closed() {
 		return
 	}
 	p.emuMu.Lock()
 	defer p.emuMu.Unlock()
+	if seq, ok := modifiedKey(key); ok {
+		p.emu.SendText(seq)
+		return
+	}
 	p.emu.SendKey(key)
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/dpws/berth/internal/tmux"
 )
@@ -237,5 +238,52 @@ func TestAttachEnvironmentHasNoTmux(t *testing.T) {
 	}
 	if !kept {
 		t.Error("the rest of the environment was dropped along with TMUX")
+	}
+}
+
+// The emulator drops a special key held with a modifier, so this checks the
+// bytes for one arrive at the far end rather than only that we can encode it.
+// cat -v is what makes them visible; echo is turned off first, or the tty would
+// echo the escape bytes straight back into the emulator, which would read them
+// as cursor movement instead of showing them.
+func TestModifiedKeysReachTheSession(t *testing.T) {
+	name := newTestSession(t, "modkeys")
+
+	pane, err := Attach(name, 80, 24)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	defer pane.Close()
+
+	pane.SendText("stty -echo; cat -v\n")
+	pane.SendText("ready\n")
+	if !waitFor(t, 15*time.Second, func() bool {
+		return strings.Contains(screen(pane), "ready")
+	}) {
+		t.Fatalf("cat never started; screen was:\n%s", screen(pane))
+	}
+
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyType
+		want string
+	}{
+		{"plain up", tea.KeyUp, "^[[A"},
+		{"shift+up", tea.KeyShiftUp, "^[[1;2A"},
+		{"ctrl+left", tea.KeyCtrlLeft, "^[[1;5D"},
+		{"ctrl+shift+home", tea.KeyCtrlShiftHome, "^[[1;6H"},
+	} {
+		key, ok := ToKeyPress(tea.KeyMsg{Type: tc.key})
+		if !ok {
+			t.Fatalf("ToKeyPress rejected %s", tc.name)
+		}
+		pane.SendKey(key)
+		pane.SendText("\n")
+		if !waitFor(t, 15*time.Second, func() bool {
+			return strings.Contains(screen(pane), tc.want)
+		}) {
+			t.Errorf("%s never reached the session as %q; screen was:\n%s",
+				tc.name, tc.want, screen(pane))
+		}
 	}
 }

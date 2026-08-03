@@ -1,6 +1,8 @@
 package term
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -125,6 +127,81 @@ func ToKeyPress(msg tea.KeyMsg) (uv.KeyPressEvent, bool) {
 		return uv.KeyPressEvent(k), false
 	}
 	return uv.KeyPressEvent(k), true
+}
+
+// csiFinal holds the special keys whose plain form ends in a final byte: CSI A
+// for up, SS3 P for F1. Held with a modifier they all take one shape,
+// CSI 1 ; <mod> <final> - the function keys included, since their SS3 form has
+// nowhere to put a parameter and xterm moves them to CSI to make room.
+var csiFinal = map[rune]byte{
+	uv.KeyUp:    'A',
+	uv.KeyDown:  'B',
+	uv.KeyRight: 'C',
+	uv.KeyLeft:  'D',
+	uv.KeyEnd:   'F',
+	uv.KeyHome:  'H',
+	uv.KeyF1:    'P',
+	uv.KeyF2:    'Q',
+	uv.KeyF3:    'R',
+	uv.KeyF4:    'S',
+}
+
+// csiTilde holds the special keys written CSI <n> ~ on their own, and
+// CSI <n> ; <mod> ~ with a modifier held.
+var csiTilde = map[rune]int{
+	uv.KeyInsert: 2,
+	uv.KeyDelete: 3,
+	uv.KeyPgUp:   5,
+	uv.KeyPgDown: 6,
+	uv.KeyF5:     15,
+	uv.KeyF6:     17,
+	uv.KeyF7:     18,
+	uv.KeyF8:     19,
+	uv.KeyF9:     20,
+	uv.KeyF10:    21,
+	uv.KeyF11:    23,
+	uv.KeyF12:    24,
+}
+
+// modifiedKey encodes a special key held with a modifier, and reports whether
+// it is one this needs to handle.
+//
+// The emulator encodes plain special keys and ctrl+letter itself, but its table
+// has no entry for ctrl+left or shift+home. Those reach its default arm, which
+// writes nothing unless the key came with no modifier at all - so the key was
+// dropped where it stood, and shift+up in a focused pane did nothing whatever.
+// Encoding them here is what gets them to the session.
+//
+// The modifier is xterm's: one, plus a bit for each key held. It deliberately
+// does not consult application cursor keys mode, because a modified cursor key
+// is sent in CSI form whether that mode is set or not; only the plain form
+// changes with it, and the emulator still handles the plain form.
+func modifiedKey(k uv.KeyPressEvent) (string, bool) {
+	if k.Mod == 0 {
+		return "", false
+	}
+	mod := 1
+	for _, m := range []struct {
+		bit uv.KeyMod
+		val int
+	}{
+		{uv.ModShift, 1},
+		{uv.ModAlt, 2},
+		{uv.ModCtrl, 4},
+		{uv.ModMeta, 8},
+	} {
+		if k.Mod&m.bit != 0 {
+			mod += m.val
+		}
+	}
+
+	if final, ok := csiFinal[k.Code]; ok {
+		return fmt.Sprintf("\x1b[1;%d%c", mod, final), true
+	}
+	if n, ok := csiTilde[k.Code]; ok {
+		return fmt.Sprintf("\x1b[%d;%d~", n, mod), true
+	}
+	return "", false
 }
 
 // mouseButtons maps Bubble Tea's button enum onto ultraviolet's. Both follow

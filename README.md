@@ -64,10 +64,11 @@ Requires Go 1.24+ and tmux 3.0+.
 ## Use
 
 ```sh
-berth                # launch the TUI
-berth ls             # print the session list and exit
-berth -write-config  # drop a default config file to edit
+berth                # open the session list
+berth ls             # print the sessions and exit
 berth update         # replace this binary with the newest release
+berth help           # print the commands
+berth -write-config  # drop a default config file to edit
 berth statusline     # Claude Code status line hook — see Rate limits
 ```
 

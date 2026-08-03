@@ -39,7 +39,7 @@ func main() {
 func run() error {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	writeConfig := flag.Bool("write-config", false, "write a default config file and exit")
-	flag.Usage = printUsage
+	flag.Usage = func() { printUsage(os.Stderr) }
 	flag.Parse()
 
 	switch {
@@ -54,10 +54,17 @@ func run() error {
 		return nil
 	}
 
-	// The status line command is driven by Claude Code, not by a terminal, and
-	// has no business needing tmux or a config file.
-	if flag.Arg(0) == "statusline" {
+	// These need neither tmux nor a config file. The status line command is
+	// driven by Claude Code rather than by a terminal, and updating berth on a
+	// machine that has not installed tmux yet is a reasonable thing to want.
+	switch flag.Arg(0) {
+	case "help":
+		printUsage(os.Stdout)
+		return nil
+	case "statusline":
 		return statusLine(flag.Args()[1:])
+	case "update":
+		return selfUpdate()
 	}
 
 	if err := tmux.Available(); err != nil {
@@ -69,11 +76,16 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "berth: ignoring bad config:", err)
 	}
 
-	switch flag.Arg(0) {
+	switch arg := flag.Arg(0); arg {
+	case "":
+		// No command: the session manager itself.
 	case "ls":
 		return listSessions()
-	case "update":
-		return selfUpdate()
+	default:
+		// Better to say so than to launch the whole interface because a
+		// command was misspelled.
+		printUsage(os.Stderr)
+		return fmt.Errorf("unknown command %q", arg)
 	}
 
 	ui.Version = version
@@ -204,19 +216,24 @@ func listSessions() error {
 	return w.Flush()
 }
 
-func printUsage() {
-	fmt.Fprintf(os.Stderr, `berth - tmux session manager for Claude Code and shells
+func printUsage(w io.Writer) {
+	fmt.Fprintf(w, `berth - a terminal UI for juggling Claude Code, Codex and shell sessions
 
 usage:
-  berth              launch the TUI
-  berth ls           list sessions and exit
-  berth update       replace this binary with the newest release
-  berth statusline   read Claude Code's status line payload on stdin, record
-                     the rate limits for berth, and print a status line;
-                     append -- and a command to pass the payload on to it
-  berth -write-config  write a default config to %s
+  berth                 open the session list
+  berth ls              print the sessions and exit
+  berth update          replace this binary with the newest release
+  berth help            print this
+  berth statusline      hook for Claude Code's statusLine setting: reads its
+                        payload on stdin, records the rate limits for berth,
+                        and prints a status line. Append "--" and a command
+                        to hand the payload on to your own.
 
 flags:
+  -version              print the version and exit
+  -write-config         write a default config file and exit
+
+inside berth, "?" lists the keys and "," opens the settings.
+config lives at %s
 `, config.Path())
-	flag.PrintDefaults()
 }

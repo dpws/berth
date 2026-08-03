@@ -9,7 +9,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const tea_KeyTab = tea.KeyTab
+const (
+	tea_KeyTab   = tea.KeyTab
+	tea_KeyEnter = tea.KeyEnter
+	tea_KeyEsc   = tea.KeyEsc
+)
 
 func keyRune(r rune) tea.KeyMsg        { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
 func keyType(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
@@ -143,5 +147,83 @@ func TestTabCompletesTheDirectoryField(t *testing.T) {
 	m.Update(keyType(tea_KeyTab))
 	if m.formField == fieldDir {
 		t.Error("tab did not move on once the path was complete")
+	}
+}
+
+// The directory field starts on the configured default rather than showing it
+// as a hint, so it can be completed further and is visibly what you will get.
+func TestNewSessionFormPrefillsTheDefaultDirectory(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	m.cfg.DefaultDir = "/home/someone/code"
+
+	m.Update(keyRune('n'))
+
+	want := "/home/someone/code" + string(os.PathSeparator)
+	if got := m.dirInput.Value(); got != want {
+		t.Errorf("dir field = %q, want %q", got, want)
+	}
+	// The cursor sits at the end, ready for the next path segment.
+	if m.dirInput.Position() != len([]rune(want)) {
+		t.Errorf("cursor at %d, want the end of %q", m.dirInput.Position(), want)
+	}
+}
+
+// Changing the default in settings has to reach the dialog, which held a copy
+// taken when the input was first built.
+func TestChangingTheDefaultDirectoryReachesTheForm(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+
+	m.Update(keyRune(','))
+	cursorTo(t, m, "default_dir")
+	m.Update(keyType(tea_KeyEnter))
+	m.settingInput.SetValue("/var/tmp/elsewhere")
+	m.Update(keyType(tea_KeyEnter))
+	m.Update(keyType(tea_KeyEsc))
+
+	m.Update(keyRune('n'))
+	want := "/var/tmp/elsewhere" + string(os.PathSeparator)
+	if got := m.dirInput.Value(); got != want {
+		t.Errorf("dir field = %q, want the new default %q", got, want)
+	}
+	if m.dirInput.Placeholder != "/var/tmp/elsewhere" {
+		t.Errorf("placeholder = %q, want it refreshed", m.dirInput.Placeholder)
+	}
+}
+
+func TestDefaultDirValue(t *testing.T) {
+	sep := string(os.PathSeparator)
+	cases := map[string]string{
+		"":              "",
+		"/home/x":       "/home/x" + sep,
+		"/home/x" + sep: "/home/x" + sep,
+	}
+	for in, want := range cases {
+		if got := defaultDirValue(in); got != want {
+			t.Errorf("defaultDirValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Completion may only add. A directory whose children share no prefix would
+// otherwise lose its trailing separator, and the next tab would look among its
+// siblings instead of inside it.
+func TestCompleteDirNeverShortensTheInput(t *testing.T) {
+	root := tree(t, "alpha", "beta", "gamma")
+	typed := root + string(filepath.Separator)
+
+	got, matches := completeDir(typed)
+	if got != typed {
+		t.Errorf("completing %q gave %q, want it unchanged", typed, got)
+	}
+	if len(matches) != 3 {
+		t.Errorf("matches = %q, want all three offered", matches)
+	}
+
+	// And it is still the same directory being offered on the next press.
+	again, matchesAgain := completeDir(got)
+	if again != typed || len(matchesAgain) != 3 {
+		t.Errorf("second tab gave %q with %q", again, matchesAgain)
 	}
 }

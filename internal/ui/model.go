@@ -724,7 +724,9 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 		m.newStart = tmux.StartNew
 		m.newKind = tmux.KindClaude
 		m.nameInput.SetValue("")
-		m.dirInput.SetValue("")
+		m.dirInput.SetValue(defaultDirValue(m.cfg.DefaultDir))
+		m.dirInput.Placeholder = m.cfg.DefaultDir
+		m.dirInput.CursorEnd()
 		m.nameInput.Focus()
 		m.dirInput.Blur()
 		return textinput.Blink
@@ -842,12 +844,26 @@ func (m *Model) moveFormField(delta int) tea.Cmd {
 	return textinput.Blink
 }
 
+// defaultDirValue is what the directory field starts with: the configured
+// default, ready to be completed further rather than shown as a hint you have
+// to retype. The trailing separator means the first tab lists what is inside
+// it instead of completing the name of the directory itself.
+func defaultDirValue(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if strings.HasSuffix(dir, string(os.PathSeparator)) {
+		return dir
+	}
+	return dir + string(os.PathSeparator)
+}
+
 // completeDirField extends the directory to the longest path it certainly
 // starts with, and reports whether anything changed.
 func (m *Model) completeDirField() bool {
 	typed := m.dirInput.Value()
 	if typed == "" {
-		typed = m.cfg.DefaultDir + string(os.PathSeparator)
+		typed = defaultDirValue(m.cfg.DefaultDir)
 	}
 	completed, matches := completeDir(typed)
 	m.dirMatches = matches

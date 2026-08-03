@@ -55,7 +55,16 @@ func completeDir(input string) (completed string, matches []string) {
 		// One answer, so the separator can be added and the next level typed.
 		completed += string(filepath.Separator)
 	}
-	return unexpandHome(completed, input), matches
+	completed = unexpandHome(completed, input)
+
+	// Completion may only ever add. Where the candidates share nothing,
+	// filepath.Join cleans the trailing separator off a directory that was
+	// already complete - which would turn the next tab into a search among
+	// that directory's siblings rather than its contents.
+	if !strings.HasPrefix(completed, input) {
+		return input, matches
+	}
+	return completed, matches
 }
 
 // isDir reports whether an entry is a directory, following symlinks, since a

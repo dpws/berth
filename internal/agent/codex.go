@@ -73,8 +73,13 @@ func (w *codexWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 		if !ok {
 			continue
 		}
+		// A rollout only stops being "working" on an explicit task_complete, so
+		// a Codex killed mid-turn leaves one saying it is busy for good. A
+		// fresh session in the same directory has no task yet and loses to it
+		// in better(), and berth then reports the new session as busy with the
+		// dead one's work. Nothing that quiet is still running.
 		status := Idle
-		if r.working {
+		if r.working && time.Since(r.updated) < staleAfter {
 			status = Busy
 		}
 		out[s.Name] = Info{Status: status, Task: r.task, Updated: r.updated}

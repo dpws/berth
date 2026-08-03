@@ -118,6 +118,10 @@ func SaveStatusLine(s StatusLine, now time.Time) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -143,7 +147,9 @@ func readCachedClaude() (Limits, error) {
 		return Limits{}, errNoStatusLine
 	}
 
-	limits := Limits{Sampled: time.Unix(c.SampledUnix, 0)}
+	// A cache written without a stamp has no age; time.Unix(0, 0) is not the
+	// zero time, so it would be reported as a reading taken in 1970.
+	limits := Limits{Sampled: unixOrZero(c.SampledUnix)}
 	for _, w := range []struct {
 		label string
 		win   *statusWindow

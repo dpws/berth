@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -226,5 +227,52 @@ func TestCompleteDirNeverShortensTheInput(t *testing.T) {
 	again, matchesAgain := completeDir(got)
 	if again != typed || len(matchesAgain) != 3 {
 		t.Errorf("second tab gave %q with %q", again, matchesAgain)
+	}
+}
+
+// A path written with a "~" must descend as well as one written in full.
+// filepath.Join cleaned the trailing separator off the expansion, so
+// "~/projects/" was completed among the neighbours of projects, not its
+// contents - and no amount of tabbing could get further in.
+func TestCompleteDirDescendsThroughATilde(t *testing.T) {
+	root := tree(t, filepath.Join("projects", "berth"), filepath.Join("projects", "notes"))
+	t.Setenv("HOME", root)
+
+	typed := "~" + string(filepath.Separator) + "projects" + string(filepath.Separator)
+	got, matches := completeDir(typed)
+	if len(matches) != 2 {
+		t.Fatalf("matches = %q, want the two directories inside projects", matches)
+	}
+	if got != typed {
+		t.Errorf("completing %q gave %q, want it unchanged", typed, got)
+	}
+
+	// And one candidate inside completes into it rather than beside it.
+	one, _ := completeDir(typed + "be")
+	if want := typed + "berth" + string(filepath.Separator); one != want {
+		t.Errorf("completed to %q, want %q", one, want)
+	}
+}
+
+// The shared prefix gives way a character at a time. Trimming bytes left half
+// a rune in the field for names that part inside a multibyte character - every
+// accented Latin letter shares its lead byte with the others.
+func TestCommonPrefixKeepsWholeCharacters(t *testing.T) {
+	cases := []struct {
+		names []string
+		want  string
+	}{
+		{[]string{"Bücher", "Bäume"}, "B"},
+		{[]string{"süß", "süßer"}, "süß"},
+		{[]string{"alpha", "beta"}, ""},
+	}
+	for _, c := range cases {
+		got := commonPrefix(c.names)
+		if got != c.want {
+			t.Errorf("commonPrefix(%q) = %q, want %q", c.names, got, c.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("commonPrefix(%q) = %q, which is not valid UTF-8", c.names, got)
+		}
 	}
 }

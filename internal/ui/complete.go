@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxCompletions bounds what is offered. A directory of a thousand entries is
@@ -80,7 +81,10 @@ func isDir(dir string, e os.DirEntry) bool {
 	return err == nil && info.IsDir()
 }
 
-// commonPrefix returns the longest prefix shared by every name.
+// commonPrefix returns the longest prefix shared by every name. It gives way a
+// character at a time rather than a byte at a time: two names that share only
+// the lead byte of a rune - "Bücher" and "Bäume" both start 0x42 0xC3 - would
+// otherwise leave a half-written character in the field.
 func commonPrefix(names []string) string {
 	if len(names) == 0 {
 		return ""
@@ -88,7 +92,8 @@ func commonPrefix(names []string) string {
 	out := names[0]
 	for _, n := range names[1:] {
 		for !strings.HasPrefix(n, out) {
-			out = out[:len(out)-1]
+			_, size := utf8.DecodeLastRuneInString(out)
+			out = out[:len(out)-size]
 			if out == "" {
 				return ""
 			}
@@ -106,10 +111,18 @@ func expandHome(p string) string {
 	if err != nil {
 		return p
 	}
+	sep := string(filepath.Separator)
 	if p == "~" {
-		return home + string(filepath.Separator)
+		return home + sep
 	}
-	return filepath.Join(home, p[2:])
+	// Join cleans the trailing separator off, and that separator is what says
+	// "look inside this directory" rather than "match its siblings" - without
+	// it, "~/projects/" completes among the neighbours of projects.
+	out := filepath.Join(home, p[2:])
+	if strings.HasSuffix(p, sep) && !strings.HasSuffix(out, sep) {
+		out += sep
+	}
+	return out
 }
 
 // unexpandHome puts the ~ back, so completing a path that was typed with one

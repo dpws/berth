@@ -9,6 +9,10 @@ import (
 	"github.com/dpws/berth/internal/tmux"
 )
 
+// minListRows is what the session list keeps for itself before the usage block
+// is offered anything. A session takes two rows, so this is one of them.
+const minListRows = 2
+
 // sidebarLines renders the session list as exactly h lines, each exactly w
 // cells wide.
 func (m *Model) sidebarLines(w, h int) []string {
@@ -31,8 +35,10 @@ func (m *Model) sidebarLines(w, h int) []string {
 	}
 
 	// Reserve the last two rows for the legend, plus whatever the usage block
-	// needs above it. Both are dropped first when the window is too short.
-	usage := m.usageBlock(w, h-len(lines)-2)
+	// needs above it. The block only gets what is left once the list has room
+	// for a session or two: a sidebar showing rate limits and no sessions is
+	// not a sidebar, and a short window used to produce exactly that.
+	usage := m.usageBlock(w, h-len(lines)-2-minListRows)
 	reserved := 2 + len(usage)
 	listHeight := h - len(lines) - reserved
 	visible := m.visibleSessions()

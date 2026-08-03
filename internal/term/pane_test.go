@@ -218,3 +218,24 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// tmux refuses to attach a session from inside one, so a berth run in a tmux
+// pane would start a client that died at once - and start another, and another.
+func TestAttachEnvironmentHasNoTmux(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,123,0")
+	t.Setenv("TMUX_PANE", "%7")
+	t.Setenv("BERTH_ENV_PROBE", "kept")
+
+	var kept bool
+	for _, kv := range envWithoutTmux() {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			t.Errorf("%q survived into the attach environment", kv)
+		}
+		if kv == "BERTH_ENV_PROBE=kept" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Error("the rest of the environment was dropped along with TMUX")
+	}
+}

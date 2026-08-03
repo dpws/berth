@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -17,6 +18,10 @@ func TestSanitizeName(t *testing.T) {
 		"":                "",
 		"tab\there":       "tab-here",
 		"~/code/my.app":   "~/code/my-app",
+		// tmux stores a name through vis(3), so a backslash comes back
+		// doubled and the name berth was handed matches no session at all.
+		"a\\b":       "a-b",
+		"bell\x07ed": "belled",
 	}
 	for in, want := range cases {
 		if got := SanitizeName(in); got != want {
@@ -145,6 +150,40 @@ func TestListParsesTabDelimitedOutput(t *testing.T) {
 	}
 	if got.Command == "" {
 		t.Error("pane command should be populated")
+	}
+}
+
+// tmux does not escape session_path, so a directory with a tab in its name put
+// an extra field in the middle of the line: every value after it shifted, the
+// pane pid was read off a path fragment, and berth's own tags landed in the
+// wrong columns - the session lost its kind, its colour and its managed flag.
+func TestListSurvivesATabInTheSessionPath(t *testing.T) {
+	requireTmux(t)
+
+	dir := filepath.Join(t.TempDir(), "a\tb")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Skipf("cannot create a directory with a tab in its name: %v", err)
+	}
+
+	name := testName(t, "tabdir")
+	created, err := New(NewOptions{Name: name, Dir: dir, Kind: KindShell, Command: "sh"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = Kill(created) })
+
+	got, ok := find(t, created)
+	if !ok {
+		t.Fatal("session missing from List")
+	}
+	if got.Dir != dir {
+		t.Errorf("Dir = %q, want %q", got.Dir, dir)
+	}
+	if !got.Managed || got.Kind != KindShell {
+		t.Errorf("got managed=%v kind=%q, want berth's own tags intact", got.Managed, got.Kind)
+	}
+	if got.PanePID <= 0 {
+		t.Errorf("PanePID = %d, want the pane's pid", got.PanePID)
 	}
 }
 

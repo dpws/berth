@@ -928,3 +928,30 @@ func TestHeaderShowsTheVersionOnTheRight(t *testing.T) {
 		}
 	}
 }
+
+// Bubble Tea drops lines off the top of a view taller than the terminal, so a
+// help screen too tall for the window lost its border, its title and its first
+// bindings with nothing to say so.
+func TestDialogsAreCutToTheWindowNotOffTheTop(t *testing.T) {
+	m := New(config.Default())
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m.mode = modeHelp
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) > m.height {
+		t.Fatalf("help is %d lines in a %d-row window", len(lines), m.height)
+	}
+	if !strings.Contains(ansi.Strip(view), "berth") {
+		t.Error("the title was cut; want the top of the dialog kept")
+	}
+	if !strings.Contains(ansi.Strip(view), "window too short") {
+		t.Error("the dialog was cut without saying so")
+	}
+
+	// With room to spare nothing is cut.
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	if strings.Contains(ansi.Strip(m.View()), "window too short") {
+		t.Error("a dialog that fits was marked as cut")
+	}
+}

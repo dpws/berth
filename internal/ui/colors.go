@@ -195,6 +195,5 @@ func (m *Model) colorsView() string {
 
 	b.WriteString("\n")
 	b.WriteString(joinHelp("↑/↓", "choose", "enter", "apply", "esc", "cancel"))
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		dialogStyle.Render(b.String()))
+	return m.placeDialog(dialogStyle.Render(b.String()))
 }

@@ -268,6 +268,14 @@ func Replace(path string, content []byte) error {
 		tmp.Close()
 		return err
 	}
+	// Rename orders itself against other renames, not against the write behind
+	// it. Without this the directory entry can reach the disk while the bytes
+	// have not, and a machine that loses power mid-update comes back with a
+	// berth that is the right size and all zeroes.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}

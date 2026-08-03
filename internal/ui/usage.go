@@ -14,8 +14,10 @@ import (
 // percentage, so a wider sidebar buys a longer bar rather than more blank.
 const (
 	// labelMax is the widest a row label may be. Windows are "5h" and "week",
-	// but Codex meters some models separately and names those buckets.
-	labelMax = 9
+	// but Codex meters some models separately, and a row then carries the
+	// bucket and the window both ("spark week"). The column only takes what its
+	// widest row asks for, so this is a ceiling rather than a cost.
+	labelMax = 12
 	// barFixed is what the rest of the row costs: a leading space, the label,
 	// a space, two of gap, and "100%".
 	barFixed = 1 + labelMax + 1 + 2 + 4
@@ -66,13 +68,24 @@ func (m *Model) usageBlock(w, budget int) []string {
 	if !ok {
 		return nil // not read yet
 	}
-	rows := usageRows(limits, kind, w)
-	if len(rows) == 0 {
+	rows, note := usageRows(limits, kind, w)
+	if len(rows) == 0 && note == "" {
 		return nil
 	}
 	// The divider costs a row, so the block can only be as tall as its budget.
-	if len(rows) > budget-1 {
-		rows = rows[:budget-1]
+	// The note is the row that says when the numbers were taken, so it outranks
+	// the last meter when there is not room for both - but not the only meter,
+	// since "as of" over nothing says less than a figure with no date on it.
+	room := budget - 1
+	switch {
+	case note == "":
+	case len(rows) < room:
+		rows = append(rows, note)
+	case room >= 2:
+		rows = append(rows[:room-1:room-1], note)
+	}
+	if len(rows) > room {
+		rows = rows[:room]
 	}
 
 	out := make([]string, 0, len(rows)+1)
@@ -80,13 +93,15 @@ func (m *Model) usageBlock(w, budget int) []string {
 	return append(out, rows...)
 }
 
-// usageRows renders the body of the block, without the divider.
-func usageRows(l usage.Limits, kind string, w int) []string {
+// usageRows renders the body of the block, without the divider. The note comes
+// back apart from the meters because it is the last row and so the first the
+// budget would cut, and it is worth more than the meter it displaces.
+func usageRows(l usage.Limits, kind string, w int) (rows []string, note string) {
 	if l.Empty() {
 		if l.Err == nil {
-			return nil
+			return nil, ""
 		}
-		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}
+		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}, ""
 	}
 
 	// One label column for the block, as wide as its widest row needs.
@@ -100,14 +115,11 @@ func usageRows(l usage.Limits, kind string, w int) []string {
 		labelW = labelMax
 	}
 
-	rows := make([]string, 0, len(l.Windows)+1)
+	rows = make([]string, 0, len(l.Windows)+1)
 	for _, win := range l.Windows {
 		rows = append(rows, usageRow(win, kind, w, labelW))
 	}
-	if note := usageNote(l, w); note != "" {
-		rows = append(rows, note)
-	}
-	return rows
+	return rows, usageNote(l, w)
 }
 
 // usageRow lays out one window as: label, meter, value, right-aligned to w.
@@ -175,7 +187,7 @@ func usageNote(l usage.Limits, w int) string {
 	// Numbers only arrive while an agent is running, so old ones say when they
 	// were taken rather than pretending to be current.
 	if age := time.Since(l.Sampled); !l.Sampled.IsZero() && age > usageStaleAfter {
-		note = "as of " + l.Sampled.Format("15:04")
+		note = "as of " + sampledAt(l.Sampled, time.Now())
 	} else if next := soonestReset(l); !next.IsZero() {
 		note = "resets " + next.Format("15:04")
 	}
@@ -183,6 +195,22 @@ func usageNote(l usage.Limits, w int) string {
 		return ""
 	}
 	return " " + faintStyle.Render(truncate(note, max(1, w-1)))
+}
+
+// sampledAt says when a reading was taken. A clock time alone reads as today,
+// and a reading easily is not: Codex meters some models separately and berth
+// keeps the last word on every bucket, so the age of the block is the age of
+// whichever one has gone longest untouched - days, for a model tried once.
+//
+// Codex stamps its rollouts in UTC, so the reading is moved into the zone the
+// clock on the wall is in before either the day or the time is read off it.
+func sampledAt(at, now time.Time) string {
+	const day = "2006-01-02"
+	at = at.In(now.Location())
+	if at.Format(day) == now.Format(day) {
+		return at.Format("15:04")
+	}
+	return at.Format("Jan 2 15:04")
 }
 
 // soonestReset returns the first window boundary still ahead of us.

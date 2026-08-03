@@ -120,6 +120,30 @@ func TestUsageBlockRespectsItsBudget(t *testing.T) {
 	}
 }
 
+// The note is the last row and so the first a tight budget would cut - but it
+// is the row saying the numbers are old, which beats the meter it displaces.
+func TestTightBudgetKeepsTheNoteOverTheLastMeter(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "work", Kind: tmux.KindCodex, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindCodex: {Kind: tmux.KindCodex, Sampled: time.Now().Add(-3 * time.Hour),
+			Windows: []usage.Window{{Label: "5h", Percent: 28}, {Label: "week", Percent: 61}}},
+	}
+
+	// Divider, one meter, the note.
+	got := m.usageBlock(28, 3)
+	if len(got) != 3 || !strings.Contains(ansi.Strip(got[2]), "as of") {
+		t.Errorf("block = %q, want the note in place of the second meter", ansi.Strip(strings.Join(got, "|")))
+	}
+	// With room for only one row under the rule, a figure beats a bare date.
+	got = m.usageBlock(28, 2)
+	if len(got) != 2 || !strings.Contains(ansi.Strip(got[1]), "28%") {
+		t.Errorf("block = %q, want the meter", ansi.Strip(strings.Join(got, "|")))
+	}
+}
+
 func TestUsageBlockHiddenByConfig(t *testing.T) {
 	m := newTestModel()
 	m.cfg.HideUsage = true
@@ -163,6 +187,35 @@ func TestSidebarStaysExactlyHighWithUsage(t *testing.T) {
 		if len(m.rowSessions) != len(lines) {
 			t.Errorf("h=%d: %d rows mapped for %d lines",
 				h, len(m.rowSessions), len(lines))
+		}
+	}
+}
+
+// The usage block used to take every row a short window had left over, so a
+// terminal eight or ten rows tall drew meters and not one session.
+func TestUsageBlockNeverStarvesTheSessionList(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "alpha", Kind: tmux.KindCodex, Managed: true},
+		{Name: "beta", Kind: tmux.KindCodex, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindCodex: {Kind: tmux.KindCodex, Windows: []usage.Window{
+			{Label: "5h", Percent: 28, ResetsAt: time.Now().Add(time.Hour)},
+			{Label: "week", Percent: 61, ResetsAt: time.Now().Add(48 * time.Hour)},
+		}},
+	}
+
+	for h := 5; h <= 16; h++ {
+		m.sidebarLines(28, h)
+		shown := 0
+		for _, s := range m.rowSessions {
+			if s >= 0 {
+				shown++
+			}
+		}
+		if shown == 0 {
+			t.Errorf("h=%d drew no session rows", h)
 		}
 	}
 }
@@ -346,5 +399,40 @@ func TestWindowTitleMarksSessionsWaitingForInput(t *testing.T) {
 	})
 	if got := m.windowTitle(); got != "●2 api (claude) — berth" {
 		t.Errorf("title = %q, want a count", got)
+	}
+}
+
+// Codex keeps the last word on every limit bucket, so a stale block can be
+// days old. "as of 14:22" alone would read as this afternoon.
+func TestStaleNoteNamesTheDayWhenItIsNotToday(t *testing.T) {
+	now := time.Date(2026, 8, 3, 22, 40, 0, 0, time.UTC)
+	if got := sampledAt(now.Add(-2*time.Hour), now); got != "20:40" {
+		t.Errorf("sampledAt(today) = %q, want the clock time alone", got)
+	}
+	if got := sampledAt(now.Add(-3*24*time.Hour), now); got != "Jul 31 22:40" {
+		t.Errorf("sampledAt(3 days ago) = %q, want the day named", got)
+	}
+	// Just before midnight is still another day, not "seven hours ago".
+	if got := sampledAt(now.Add(-23*time.Hour), now); got != "Aug 2 23:40" {
+		t.Errorf("sampledAt(yesterday) = %q, want the day named", got)
+	}
+}
+
+// Codex stamps its rollouts in UTC. Reading the day and the time straight off
+// that put the note hours - and often a day - away from the clock on the wall.
+func TestStaleNoteIsInTheReadersOwnZone(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skipf("no zone database: %v", err)
+	}
+	now := time.Date(2026, 8, 4, 6, 0, 0, 0, time.UTC).In(la) // 23:00 on Aug 3 in LA
+	// Tomorrow by the stamp, still this evening on the reader's clock.
+	at := time.Date(2026, 8, 4, 4, 30, 0, 0, time.UTC)
+	if got := sampledAt(at, now); got != "21:30" {
+		t.Errorf("sampledAt(this evening) = %q, want the local clock time alone", got)
+	}
+	// And a day back is a day back in the same zone, not in UTC's.
+	if got := sampledAt(at.Add(-24*time.Hour), now); got != "Aug 2 21:30" {
+		t.Errorf("sampledAt(yesterday evening) = %q, want the local day and time", got)
 	}
 }

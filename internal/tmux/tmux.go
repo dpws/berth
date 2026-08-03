@@ -46,11 +46,17 @@ const (
 	optOrder = "@berth_order"
 )
 
-// sep delimits fields in -F output. A raw tab is unambiguous: tmux escapes
-// control characters that appear inside values (a tab in a name is printed as
-// "\011"), so the only literal tab in the output is the one we asked for.
+// sep delimits fields in -F output. A raw tab is unambiguous for most fields:
+// tmux escapes control characters in a session name (a tab there is printed as
+// "\011"), so the only literal tab it puts in the output is ours.
 // Non-printable separators such as 0x1f are no good — tmux escapes those too,
 // including the ones in our own format string.
+//
+// session_path is the exception: it is not escaped, so a directory with a tab
+// in its name would split into an extra field and shift every value after it -
+// the pane's pid read off a path fragment, berth's own tags read off the wrong
+// columns, and the session losing its kind and colour. It is therefore listed
+// last, where the extra fields belong to it and can be joined back on.
 const sep = "\t"
 
 var listFormat = strings.Join([]string{
@@ -59,13 +65,13 @@ var listFormat = strings.Join([]string{
 	"#{session_attached}",
 	"#{session_created}",
 	"#{session_activity}",
-	"#{session_path}",
 	"#{pane_current_command}",
 	"#{pane_pid}",
 	"#{" + optManaged + "}",
 	"#{" + optKind + "}",
 	"#{" + optColor + "}",
 	"#{" + optOrder + "}",
+	"#{session_path}",
 }, sep)
 
 // Session is a tmux session as berth cares about it.
@@ -150,13 +156,14 @@ func List() ([]Session, error) {
 			Attached: atoi(f[2]),
 			Created:  unix(f[3]),
 			Activity: unix(f[4]),
-			Dir:      f[5],
-			Command:  f[6],
-			PanePID:  atoi(f[7]),
-			Managed:  f[8] == "1",
-			Kind:     f[9],
-			Color:    f[10],
-			Order:    order(f[11]),
+			Command:  f[5],
+			PanePID:  atoi(f[6]),
+			Managed:  f[7] == "1",
+			Kind:     f[8],
+			Color:    f[9],
+			Order:    order(f[10]),
+			// The path is last, so anything it split into is still the path.
+			Dir: strings.Join(f[11:], sep),
 		}
 		sessions = append(sessions, s)
 	}
@@ -276,9 +283,20 @@ func Rename(old, name string) (string, error) {
 
 // SanitizeName makes a string usable as a tmux session name. tmux treats "."
 // and ":" as target separators, and whitespace makes targets awkward to type.
+//
+// Backslashes and control bytes go too, because tmux stores a name through
+// vis(3): a session created as `a\b` is held as `a\\b`, and the name berth was
+// handed then matches nothing. Every set-option that tags the session as
+// berth's would quietly miss, and the list would never show it as managed.
 func SanitizeName(name string) string {
-	repl := strings.NewReplacer(".", "-", ":", "-", " ", "-", "\t", "-", "\n", "")
-	return strings.Trim(repl.Replace(strings.TrimSpace(name)), "-")
+	repl := strings.NewReplacer(".", "-", ":", "-", " ", "-", "\t", "-", "\\", "-", "\n", "")
+	clean := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, repl.Replace(strings.TrimSpace(name)))
+	return strings.Trim(clean, "-")
 }
 
 // UniqueName appends a numeric suffix until the name is free.

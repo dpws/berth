@@ -323,3 +323,23 @@ func TestSpinnerRunsOnlyWhileSomethingWorks(t *testing.T) {
 		t.Error("the spinner ticks even with agent status hidden")
 	}
 }
+
+// A tea.Tick cannot be cancelled, so turning the rate limit block off and on
+// again left the tick already in flight running beside the chain that replaced
+// it. Every toggle added one more read of both agents' logs per interval.
+func TestTogglingUsageDoesNotLeaveASecondPollChain(t *testing.T) {
+	m := newTestModel()
+	inFlight := usageTickMsg{gen: m.usageGen}
+
+	m.cfg.HideUsage = true
+	m.applyConfig()
+	m.cfg.HideUsage = false
+	m.applyConfig()
+
+	if cmd := m.update(inFlight); cmd != nil {
+		t.Error("the tick from the replaced chain kept polling")
+	}
+	if cmd := m.update(usageTickMsg{gen: m.usageGen}); cmd == nil {
+		t.Error("the current chain stopped polling")
+	}
+}

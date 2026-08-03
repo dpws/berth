@@ -126,16 +126,23 @@ func codexLimits(byID map[string]codexSnapshot) Limits {
 		}
 		// The oldest reading on show, not the newest. A bucket the current
 		// model reports against is written every few seconds and would
-		// otherwise vouch for one that stopped being written an hour ago.
-		if out.Sampled.IsZero() || snap.at.Before(out.Sampled) {
+		// otherwise vouch for one that stopped being written an hour ago. A
+		// bucket whose lines carried no timestamp has nothing to say about
+		// age, and must not pass for the oldest of all.
+		if !snap.at.IsZero() && (out.Sampled.IsZero() || snap.at.Before(out.Sampled)) {
 			out.Sampled = snap.at
 		}
 		for _, w := range snap.windows {
 			label := windowLabel(w.WindowMinutes)
 			if named {
 				// With more than one bucket in play, "week" twice says
-				// nothing; the bucket is what tells them apart.
+				// nothing; the bucket is what tells them apart. A bucket that
+				// meters two periods still needs the window as well, or it
+				// names both of its own rows the same.
 				label = codexLimitLabel(id, snap.limits.LimitName)
+				if len(snap.windows) > 1 {
+					label += " " + windowLabel(w.WindowMinutes)
+				}
 			}
 			out.Windows = append(out.Windows, Window{
 				Label:    label,

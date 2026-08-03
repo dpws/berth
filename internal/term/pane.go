@@ -87,7 +87,7 @@ func Attach(session string, w, h int) (*Pane, error) {
 	// -u forces UTF-8; the tmux client is what actually renders the session,
 	// so nested prefix keys and copy mode keep working as usual.
 	cmd := exec.Command("tmux", "-u", "attach-session", "-t", "="+session)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(envWithoutTmux(),
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
 	)
@@ -363,6 +363,25 @@ func (p *Pane) notify() {
 	case p.dirty <- struct{}{}:
 	default:
 	}
+}
+
+// envWithoutTmux is the environment with $TMUX and $TMUX_PANE taken out.
+//
+// tmux refuses to attach a session from inside one - "sessions should be nested
+// with care, unset $TMUX to force" - and exits. Running berth from a tmux pane
+// therefore started a client that died at once, which cleared the pane, which
+// asked for the session again a tenth of a second later: several dead clients a
+// second, each leaving a pty behind, until berth ran out of descriptors.
+func envWithoutTmux() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func clampSize(w, h int) (int, int) {

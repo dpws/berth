@@ -161,19 +161,47 @@ func Load() (Config, error) {
 }
 
 // Save writes cfg to the config path, creating parent directories.
+//
+// The file is written beside the real one and renamed over it. Writing in place
+// truncates first, so a crash or a full disk mid-write would leave a config
+// that no longer parses - and Load treats that as a config to start over from,
+// losing every setting the user ever changed. It is written 0600 because
+// clip_agent_token is a shared secret; the settings screen masks it on the way
+// in, which is worth little if the file is readable by everyone on the box.
 func (c Config) Save() error {
 	path := Path()
 	if path == "" {
 		return errors.New("no user config directory available")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+
+	tmp, err := os.CreateTemp(dir, "config-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // withDefaults fills in anything the config file left out.

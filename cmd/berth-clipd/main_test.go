@@ -189,3 +189,21 @@ func TestListenLoopbackRejectsRubbish(t *testing.T) {
 		t.Error("want an error for an address with no port")
 	}
 }
+
+// The clipboard is asked for a type it actually offers. Seeing any "image/"
+// target and then demanding image/png regardless meant a browser that offers
+// only image/jpeg was reported as holding no image at all.
+func TestPickImageType(t *testing.T) {
+	cases := map[string]string{
+		"text/plain\nimage/png\nimage/jpeg":    "image/png",
+		"TARGETS\nimage/jpeg\n":                "image/jpeg",
+		"image/tiff\n":                         "image/tiff",
+		"text/plain\ntext/html\nUTF8_STRING\n": "",
+		"":                                     "",
+	}
+	for list, want := range cases {
+		if got := pickImageType(list); got != want {
+			t.Errorf("pickImageType(%q) = %q, want %q", list, got, want)
+		}
+	}
+}

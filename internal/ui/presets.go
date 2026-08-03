@@ -215,8 +215,7 @@ func (m *Model) presetsView() string {
 
 	b.WriteString("\n")
 	b.WriteString(joinHelp("enter", "use", "x", "remove", "esc", "close"))
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		dialogStyle.Render(b.String()))
+	return m.placeDialog(dialogStyle.Render(b.String()))
 }
 
 // presetRow renders one preset as its label, then where and how it starts.

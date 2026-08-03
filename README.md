@@ -392,8 +392,10 @@ a bucket you have barely touched is otherwise the newest thing on disk, and
 reads as an empty meter while your real quota is most of the way gone:
 
 ```
- codex ▓▓▓▓▓░░░░░░░░░   34%
- spark ░░░░░░░░░░░░░░    0%
+ codex 5h   ▓▓▓▓▓░░░░░░   34%
+ codex week ▓▓▓▓▓▓▓▓░░░   70%
+ spark 5h   ░░░░░░░░░░░    0%
+ spark week ░░░░░░░░░░░    0%
 ```
 
 **Claude** needs one thing wired up first, and then it is exact too.
@@ -432,7 +434,8 @@ Two things to know. `rate_limits` is only sent to Claude.ai subscribers, and
 only after a session's first response — so a brand new session shows nothing
 until it has answered once, and API-key users never get it. And the numbers
 only refresh while a Claude session is running, so a reading older than twenty
-minutes is labelled `as of 14:05` rather than passed off as live.
+minutes is labelled `as of 14:05` rather than passed off as live — with the day
+named too (`as of Aug 2 14:05`) once it is no longer today's.
 
 **What berth will not do.** Claude Code's `/usage` reaches an internal endpoint
 with the Claude Code login token. Driving that from another program is

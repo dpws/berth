@@ -123,8 +123,11 @@ type Model struct {
 	statusTicking bool
 
 	// usageTracker reads the agents' own logs; it holds per-file state between
-	// refreshes, so it is created once and reused.
+	// refreshes, so it is created once and reused. usageGen names the poll
+	// chain it belongs to, so a tick left over from an earlier one is dropped
+	// rather than starting a second chain beside the current one.
 	usageTracker *usage.Tracker
+	usageGen     int
 	usage        map[string]usage.Limits
 
 	// agentWatcher reads what the agents are doing; like the usage tracker it
@@ -244,8 +247,12 @@ type spinnerTickMsg struct{}
 // updateMsg carries the tag of a newer release, when there is one.
 type updateMsg string
 
-// usageTickMsg drives the slow poll of the agents' rate limits.
-type usageTickMsg time.Time
+// usageTickMsg drives the slow poll of the agents' rate limits. It carries the
+// generation of the chain that scheduled it: a tea.Tick cannot be cancelled,
+// so turning the block off and on again would otherwise leave the tick that
+// was already in flight running alongside the chain that replaced it, and the
+// logs would be re-read once more per interval for every toggle.
+type usageTickMsg struct{ gen int }
 
 type usageMsg map[string]usage.Limits
 
@@ -312,12 +319,12 @@ func tickCmd(ms int) tea.Cmd {
 	})
 }
 
-func usageTickCmd(sec int) tea.Cmd {
+func usageTickCmd(sec, gen int) tea.Cmd {
 	if sec <= 0 {
 		sec = 30
 	}
-	return tea.Tick(time.Duration(sec)*time.Second, func(t time.Time) tea.Msg {
-		return usageTickMsg(t)
+	return tea.Tick(time.Duration(sec)*time.Second, func(time.Time) tea.Msg {
+		return usageTickMsg{gen: gen}
 	})
 }
 
@@ -457,11 +464,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case usageTickMsg:
+		if msg.gen != m.usageGen {
+			return nil // a chain that has been replaced
+		}
 		return m.readUsage()
 
 	case usageMsg:
 		m.usage = msg
-		return usageTickCmd(m.cfg.UsageRefreshSeconds)
+		return usageTickCmd(m.cfg.UsageRefreshSeconds, m.usageGen)
 
 	case updateMsg:
 		if msg == "" {
@@ -538,6 +548,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if msg.pane.Exited() {
 			// The tmux client went away: the session was killed or the server
 			// detached us. Refresh and let the list decide what to show.
+			//
+			// Dropping the reference is not enough: the pty and the emulator
+			// stay open, and writeLoop sits in the emulator's pipe forever, so
+			// every session killed or detached would cost a goroutine and two
+			// descriptors for as long as berth runs.
+			msg.pane.Close()
 			m.pane = nil
 			m.focus = focusSidebar
 			return listSessions()
@@ -700,7 +716,10 @@ func (m *Model) handleTerminalMouse(msg tea.MouseMsg, x, y int) tea.Cmd {
 				m.focus = focusTerminal
 				m.syncPaneFocus()
 			}
-			forward(press, press.X-m.sidebarWidth()-1, press.Y)
+			// The press was held in screen coordinates, so it crosses the same
+			// divider and gutter the release already did. Missing the gutter
+			// put the press one column right of the release beside it.
+			forward(press, press.X-m.sidebarWidth()-1-gutter, press.Y)
 			forward(msg, x, y)
 			return nil
 		}
@@ -1309,11 +1328,16 @@ func (m *Model) clampCursor() tea.Cmd {
 // requestAttach schedules an attach after a short delay so holding j/k does
 // not spawn a tmux client per row.
 func (m *Model) requestAttach(name string) tea.Cmd {
-	if m.pane != nil && m.pane.Session == name && !m.pane.Exited() {
-		return nil
-	}
+	// The generation moves even when there is nothing to attach, because an
+	// attach already in flight has to be superseded either way: stepping to the
+	// next session and straight back within the delay would otherwise let the
+	// scheduled one land and leave the pane on a session the cursor is not on.
 	m.attachGen++
 	gen := m.attachGen
+	if m.pane != nil && m.pane.Session == name && !m.pane.Exited() {
+		m.pending = ""
+		return nil
+	}
 	m.pending = name
 	return tea.Tick(attachDelay, func(time.Time) tea.Msg {
 		return attachMsg{name: name, gen: gen}
@@ -1728,7 +1752,23 @@ func (m *Model) dialogView() string {
 	case modeHelp:
 		body = m.helpText()
 	}
-	dialog := dialogStyle.Render(body)
+	return m.placeDialog(dialogStyle.Render(body))
+}
+
+// placeDialog centres a dialog over the screen, cut to the height of the window
+// first.
+//
+// Bubble Tea drops lines off the top of a view taller than the terminal, and
+// lipgloss.Place will not shrink a block that already overflows. Between them,
+// a help screen or a long preset list on an ordinary 24-row terminal loses its
+// border and its first rows with nothing at all to say so. Cutting from the
+// bottom keeps the title where it belongs and names what was lost.
+func (m *Model) placeDialog(dialog string) string {
+	if lines := strings.Split(dialog, "\n"); m.height > 0 && len(lines) > m.height {
+		lines = lines[:m.height]
+		lines[m.height-1] = faintStyle.Render(" … window too short")
+		dialog = strings.Join(lines, "\n")
+	}
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 

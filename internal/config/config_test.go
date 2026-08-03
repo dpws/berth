@@ -113,3 +113,41 @@ func TestSessionOptionsCanBeEmptied(t *testing.T) {
 		t.Error("a config that does not mention the key lost the default")
 	}
 }
+
+// The config holds clip_agent_token, a shared secret, and is replaced by a
+// rename so a crash mid-write cannot leave a file that no longer parses.
+func TestSaveIsPrivateAndReplacesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", dir)
+
+	cfg := Default()
+	cfg.ClipAgentToken = "hunter2"
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	info, err := os.Stat(Path())
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config is mode %o, want 600: it holds a shared secret", perm)
+	}
+	// And nothing is left behind from the write.
+	entries, err := os.ReadDir(filepath.Dir(Path()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory holds %d files, want only the config", len(entries))
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.ClipAgentToken != "hunter2" {
+		t.Errorf("token = %q, want it round-tripped", got.ClipAgentToken)
+	}
+}

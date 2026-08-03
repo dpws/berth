@@ -139,12 +139,18 @@ func codexEvent(ts, payload string) string {
 	return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":%s}`, ts, payload)
 }
 
+// ago renders a rollout timestamp d in the past. Codex stamps its own lines,
+// so a turn's age is read off the file rather than the clock berth is on.
+func ago(d time.Duration) string {
+	return time.Now().Add(-d).UTC().Format(time.RFC3339)
+}
+
 func TestCodexTracksTurnsAndPrompts(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "r.jsonl"),
 		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
-			codexEvent("2026-08-03T10:00:00Z", `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
-			codexEvent("2026-08-03T10:00:01Z", `{"type":"task_started"}`)+"\n")
+			codexEvent(ago(time.Minute), `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
+			codexEvent(ago(59*time.Second), `{"type":"task_started"}`)+"\n")
 
 	w := newCodexWatcher(root)
 	sessions := []tmux.Session{{Name: "web", Dir: "/work/web"}}
@@ -158,14 +164,31 @@ func TestCodexTracksTurnsAndPrompts(t *testing.T) {
 	// The turn finishing flips it back to idle.
 	writeFile(t, filepath.Join(root, "r.jsonl"),
 		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
-			codexEvent("2026-08-03T10:00:00Z", `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
-			codexEvent("2026-08-03T10:00:01Z", `{"type":"task_started"}`)+"\n"+
-			codexEvent("2026-08-03T10:00:09Z", `{"type":"task_complete"}`)+"\n")
+			codexEvent(ago(time.Minute), `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
+			codexEvent(ago(59*time.Second), `{"type":"task_started"}`)+"\n"+
+			codexEvent(ago(51*time.Second), `{"type":"task_complete"}`)+"\n")
 
 	out = map[string]Info{}
 	w.refresh(sessions, out)
 	if got := out["web"].Status; got != Idle {
 		t.Errorf("Status = %q, want idle after task_complete", got)
+	}
+}
+
+// A Codex killed mid-turn never writes task_complete, so its rollout says it is
+// working for good. Believing that showed a new session in the same directory
+// as busy with the dead one's task.
+func TestCodexIgnoresATurnThatWentQuiet(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "r.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
+			codexEvent(ago(staleAfter+time.Hour), `{"type":"user_message","message":"fix the retry backoff"}`)+"\n"+
+			codexEvent(ago(staleAfter+time.Hour), `{"type":"task_started"}`)+"\n")
+
+	out := map[string]Info{}
+	newCodexWatcher(root).refresh([]tmux.Session{{Name: "web", Dir: "/work/web"}}, out)
+	if got := out["web"].Status; got != Idle {
+		t.Errorf("Status = %q, want idle: nothing that quiet is still running", got)
 	}
 }
 

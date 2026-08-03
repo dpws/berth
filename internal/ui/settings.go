@@ -263,8 +263,7 @@ func (m *Model) settingsView() string {
 			"esc", "close",
 		))
 	}
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		dialogStyle.Render(b.String()))
+	return m.placeDialog(dialogStyle.Render(b.String()))
 }
 
 // settingRow renders one setting as "label   value", right-aligned.
@@ -447,6 +446,7 @@ func (m *Model) applyConfig() tea.Cmd {
 		m.usageTracker, m.usage = nil, nil
 	case m.usageTracker == nil:
 		m.usageTracker = usage.NewTracker()
+		m.usageGen++
 		cmds = append(cmds, m.readUsage())
 	}
 

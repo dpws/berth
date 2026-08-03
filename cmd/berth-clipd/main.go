@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -228,22 +229,32 @@ func readUnix() ([]byte, error) {
 	type reader struct {
 		name    string
 		targets []string
-		read    []string
+		read    func(mime string) []string
 	}
 	readers := []reader{
-		{"wl-paste", []string{"--list-types"}, []string{"--no-newline", "--type", "image/png"}},
-		{"xclip", []string{"-selection", "clipboard", "-t", "TARGETS", "-o"},
-			[]string{"-selection", "clipboard", "-t", "image/png", "-o"}},
+		{"wl-paste", []string{"--list-types"}, func(mime string) []string {
+			return []string{"--no-newline", "--type", mime}
+		}},
+		{"xclip", []string{"-selection", "clipboard", "-t", "TARGETS", "-o"}, func(mime string) []string {
+			return []string{"-selection", "clipboard", "-t", mime, "-o"}
+		}},
 	}
 	for _, r := range readers {
 		if _, err := exec.LookPath(r.name); err != nil {
 			continue
 		}
 		targets, err := runCmd(r.name, r.targets...)
-		if err != nil || !strings.Contains(string(targets), "image/") {
+		if err != nil {
 			continue
 		}
-		data, err := runCmd(r.name, r.read...)
+		// Ask for a type the clipboard actually offers. Seeing "image/" and
+		// then demanding image/png regardless meant a browser offering only
+		// image/jpeg was reported as no image on the clipboard at all.
+		mime := pickImageType(string(targets))
+		if mime == "" {
+			continue
+		}
+		data, err := runCmd(r.name, r.read(mime)...)
 		if err != nil || len(data) == 0 {
 			continue
 		}
@@ -252,19 +263,78 @@ func readUnix() ([]byte, error) {
 	return nil, errNoImage
 }
 
+// pickImageType chooses an image type from a newline-separated target list,
+// preferring PNG because it is lossless and universally readable. berth has its
+// own copy of this in internal/clip; berth-clipd is deliberately a standalone
+// binary that imports nothing from the rest of the tree.
+func pickImageType(list string) string {
+	var found []string
+	for _, line := range strings.Split(list, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "image/") {
+			found = append(found, line)
+		}
+	}
+	for _, want := range []string{"image/png", "image/jpeg", "image/webp", "image/gif"} {
+		for _, got := range found {
+			if got == want {
+				return got
+			}
+		}
+	}
+	if len(found) > 0 {
+		return found[0]
+	}
+	return ""
+}
+
 // runCmd runs a clipboard helper with a timeout and returns its stdout.
 func runCmd(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, name, args...).Output()
+	out := &capped{max: maxImageBytes}
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout, cmd.Stderr = out, &stderr
+	err := cmd.Run()
+
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s timed out after %s", name, readTimeout)
 	}
-	if len(out) > maxImageBytes {
+	if out.over {
 		return nil, fmt.Errorf("clipboard image is larger than %d bytes", maxImageBytes)
 	}
-	return out, err
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("%s: %s", name, msg)
+		}
+		return nil, err
+	}
+	return out.buf.Bytes(), nil
+}
+
+// capped collects a helper's output up to a ceiling and swallows the rest.
+//
+// Buffering the whole of it and measuring afterwards is no ceiling at all: a
+// several-hundred-megabyte clipboard entry is held in memory in full - twice
+// over, once base64-encoded - before anything objects. The tail is still read
+// rather than refused, because a helper blocked on a pipe nobody is draining
+// would sit there until the timeout instead of failing now.
+type capped struct {
+	buf  bytes.Buffer
+	max  int
+	over bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.max - c.buf.Len(); room < len(p) {
+		c.over = true
+		if room > 0 {
+			c.buf.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	return c.buf.Write(p)
 }
 
 // encodeUTF16LE renders a script the way PowerShell's -EncodedCommand expects.

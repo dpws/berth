@@ -27,19 +27,26 @@ func TestWindowLabel(t *testing.T) {
 	}
 }
 
-// codexLine builds one rollout record carrying a rate limit snapshot.
-func codexLine(ts string, windows ...[3]any) string {
+// codexWindowFields renders a window pair as Codex writes it, filling in the
+// nulls for a plan that reports fewer than two.
+func codexWindowFields(windows [][3]any) (primary, secondary string) {
 	field := func(w [3]any) string {
 		return fmt.Sprintf(`{"used_percent":%v,"window_minutes":%v,"resets_at":%v}`,
 			w[0], w[1], w[2])
 	}
-	primary, secondary := "null", "null"
+	primary, secondary = "null", "null"
 	if len(windows) > 0 {
 		primary = field(windows[0])
 	}
 	if len(windows) > 1 {
 		secondary = field(windows[1])
 	}
+	return primary, secondary
+}
+
+// codexLine builds one rollout record carrying a rate limit snapshot.
+func codexLine(ts string, windows ...[3]any) string {
+	primary, secondary := codexWindowFields(windows)
 	return fmt.Sprintf(
 		`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count",`+
 			`"rate_limits":{"primary":%s,"secondary":%s,"plan_type":"pro"}}}`,
@@ -179,13 +186,13 @@ func TestReadCodexDirEmpty(t *testing.T) {
 }
 
 // codexLine with a bucket id, for the case Codex meters a model separately.
-func codexBucketLine(ts, id, name string, percent float64, minutes int, resets int64) string {
+func codexBucketLine(ts, id, name string, windows ...[3]any) string {
+	primary, secondary := codexWindowFields(windows)
 	return fmt.Sprintf(
 		`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count",`+
-			`"rate_limits":{"limit_id":%q,"limit_name":%s,`+
-			`"primary":{"used_percent":%v,"window_minutes":%d,"resets_at":%d},`+
-			`"secondary":null,"plan_type":"prolite"}}}`,
-		ts, id, nullableString(name), percent, minutes, resets)
+			`"rate_limits":{"limit_id":%q,"limit_name":%s,"primary":%s,"secondary":%s,`+
+			`"plan_type":"prolite"}}}`,
+		ts, id, nullableString(name), primary, secondary)
 }
 
 func nullableString(s string) string {
@@ -201,8 +208,8 @@ func nullableString(s string) string {
 func TestReadCodexDirKeepsEveryBucket(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "r.jsonl"),
-		codexBucketLine("2026-08-03T10:00:00Z", "codex", "", 34, 10080, 1786184122)+"\n"+
-			codexBucketLine("2026-08-03T11:00:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark", 0, 10080, 1786399909)+"\n")
+		codexBucketLine("2026-08-03T10:00:00Z", "codex", "", [3]any{34, 10080, 1786184122})+"\n"+
+			codexBucketLine("2026-08-03T11:00:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark", [3]any{0, 10080, 1786399909})+"\n")
 
 	got, err := readCodexDir(dir)
 	if err != nil {
@@ -220,12 +227,38 @@ func TestReadCodexDirKeepsEveryBucket(t *testing.T) {
 	}
 }
 
+// Most plans meter two periods per bucket. Labelling those rows by the bucket
+// alone named both of them the same, so a 5-hour figure and a weekly one sat
+// under identical headings with nothing to say which was which.
+func TestBucketWithTwoWindowsNamesBoth(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "r.jsonl"),
+		codexBucketLine("2026-08-03T10:00:00Z", "codex", "",
+			[3]any{40, 300, 1786184122}, [3]any{70, 10080, 1786284122})+"\n"+
+			codexBucketLine("2026-08-03T11:00:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark",
+				[3]any{5, 300, 1786184122}, [3]any{9, 10080, 1786284122})+"\n")
+
+	got, err := readCodexDir(dir)
+	if err != nil {
+		t.Fatalf("readCodexDir: %v", err)
+	}
+	want := []string{"codex 5h", "codex week", "spark 5h", "spark week"}
+	if len(got.Windows) != len(want) {
+		t.Fatalf("got %d windows, want %d: %+v", len(got.Windows), len(want), got.Windows)
+	}
+	for i, w := range want {
+		if got.Windows[i].Label != w {
+			t.Errorf("window %d labelled %q, want %q", i, got.Windows[i].Label, w)
+		}
+	}
+}
+
 // With one bucket there is nothing to tell apart, so the window keeps its own
 // name rather than being labelled with the limit's.
 func TestOneBucketIsLabelledByItsWindow(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "r.jsonl"),
-		codexBucketLine("2026-08-03T10:00:00Z", "codex", "", 28, 10080, 1786184122)+"\n")
+		codexBucketLine("2026-08-03T10:00:00Z", "codex", "", [3]any{28, 10080, 1786184122})+"\n")
 
 	got, err := readCodexDir(dir)
 	if err != nil {
@@ -240,9 +273,9 @@ func TestOneBucketIsLabelledByItsWindow(t *testing.T) {
 func TestBucketsTakeTheirNewestReading(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "old.jsonl"),
-		codexBucketLine("2026-08-03T09:00:00Z", "codex", "", 10, 10080, 1786184122)+"\n")
+		codexBucketLine("2026-08-03T09:00:00Z", "codex", "", [3]any{10, 10080, 1786184122})+"\n")
 	writeFile(t, filepath.Join(dir, "new.jsonl"),
-		codexBucketLine("2026-08-03T12:00:00Z", "codex", "", 55, 10080, 1786184122)+"\n")
+		codexBucketLine("2026-08-03T12:00:00Z", "codex", "", [3]any{55, 10080, 1786184122})+"\n")
 
 	got, err := readCodexDir(dir)
 	if err != nil {
@@ -272,8 +305,8 @@ func TestCodexLimitLabel(t *testing.T) {
 func TestBlockAgeIsTheOldestBucketOnShow(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "r.jsonl"),
-		codexBucketLine("2026-08-03T20:00:00Z", "codex", "", 34, 10080, 1786184122)+"\n"+
-			codexBucketLine("2026-08-03T22:17:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark", 0, 10080, 1786400230)+"\n")
+		codexBucketLine("2026-08-03T20:00:00Z", "codex", "", [3]any{34, 10080, 1786184122})+"\n"+
+			codexBucketLine("2026-08-03T22:17:00Z", "codex_bengalfox", "GPT-5.3-Codex-Spark", [3]any{0, 10080, 1786400230})+"\n")
 
 	got, err := readCodexDir(dir)
 	if err != nil {
@@ -283,5 +316,25 @@ func TestBlockAgeIsTheOldestBucketOnShow(t *testing.T) {
 	if got.Sampled.UTC().Format(time.RFC3339) != want {
 		t.Errorf("Sampled = %v, want the oldest reading (%s)",
 			got.Sampled.UTC().Format(time.RFC3339), want)
+	}
+}
+
+// A bucket recorded without a timestamp knows nothing about age. Letting it
+// win the oldest-reading comparison zeroed the block's age, and the sidebar
+// dropped the "as of" line that says the numbers are not live.
+func TestUndatedBucketDoesNotZeroTheBlockAge(t *testing.T) {
+	dir := t.TempDir()
+	// The undated bucket sorts last, so it is the one that gets the last word.
+	line := codexBucketLine("2026-08-03T20:00:00Z", "codex_zebra", "", [3]any{12, 10080, 1786400230})
+	writeFile(t, filepath.Join(dir, "r.jsonl"),
+		codexBucketLine("2026-08-03T20:00:00Z", "codex", "", [3]any{34, 10080, 1786184122})+"\n"+
+			strings.Replace(line, `"timestamp":"2026-08-03T20:00:00Z",`, "", 1)+"\n")
+
+	got, err := readCodexDir(dir)
+	if err != nil {
+		t.Fatalf("readCodexDir: %v", err)
+	}
+	if got.Sampled.IsZero() {
+		t.Error("Sampled is zero, want the one bucket that was dated")
 	}
 }

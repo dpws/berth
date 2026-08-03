@@ -67,6 +67,7 @@ Requires Go 1.24+ and tmux 3.0+.
 berth                # launch the TUI
 berth ls             # print the session list and exit
 berth -write-config  # drop a default config file to edit
+berth update         # replace this binary with the newest release
 berth statusline     # Claude Code status line hook — see Rate limits
 ```
 
@@ -161,6 +162,7 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "hide_usage": false,
   "hide_agent_status": false,
   "hide_task": false,
+  "check_updates": true,
   "hide_window_title": false,
   "usage_refresh_seconds": 30
 }
@@ -312,6 +314,30 @@ Messages along the bottom — `created api`, `copied 2 lines`, a tmux error —
 hold for a few seconds and then fade out, giving the row back to the key hints.
 Errors hold twice as long as notices, on the grounds that missing one costs
 more. Nothing redraws at that rate when the footer is quiet.
+
+## Updating
+
+`berth update` replaces the running binary with the newest release. It checks
+the download against the checksums the release publishes before trusting it,
+writes the new binary beside the old one and renames it over the top — which
+is atomic, and allowed even for the binary you are running, since the process
+keeps the file it started from until it next starts.
+
+berth also asks GitHub once a day whether there is a newer release, and says
+so in the header:
+
+```
+ BERTH 3  ↑v0.4.0
+```
+
+That check is the only request berth makes on its own. It sends nothing but
+the question, caches the answer for a day, says nothing at all when it fails,
+and never installs anything — `berth update` is what acts on it. Turn it off
+with `"check_updates": false`, or from the settings screen.
+
+A build from source is never told it is out of date. `git describe` marks
+those, and such a build is usually ahead of the newest tag rather than behind
+it; being nagged to downgrade would be worse than being told nothing.
 
 ## Rate limits
 

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/ui"
+	"github.com/dpws/berth/internal/update"
 	"github.com/dpws/berth/internal/usage"
 )
 
@@ -67,10 +69,14 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "berth: ignoring bad config:", err)
 	}
 
-	if flag.Arg(0) == "ls" {
+	switch flag.Arg(0) {
+	case "ls":
 		return listSessions()
+	case "update":
+		return selfUpdate()
 	}
 
+	ui.Version = version
 	model := ui.New(cfg)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
@@ -131,6 +137,55 @@ func statusLine(args []string) error {
 	return cmd.Run()
 }
 
+// selfUpdate replaces the running binary with the newest release.
+//
+// It is a command rather than something berth does on its own: replacing the
+// program you are running is not a decision a program should take, and a
+// session manager that restarts itself under you is worse than one that is a
+// version behind.
+func selfUpdate() error {
+	ctx := context.Background()
+	fmt.Println("berth", version)
+
+	rel, err := update.Latest(ctx, "")
+	if err != nil {
+		return err
+	}
+	switch {
+	case rel.Tag == version:
+		fmt.Println("already on the newest release")
+		return nil
+	case !update.Newer(version, rel.Tag):
+		// A build from source can be ahead of the newest tag, and telling
+		// someone to downgrade would be worse than saying nothing.
+		fmt.Printf("newest release is %s; this build is not older, leaving it alone\n", rel.Tag)
+		return nil
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("updating to %s\n", rel.Tag)
+
+	name := update.ArchiveName(rel.Tag)
+	archive, err := update.Download(ctx, rel, name)
+	if err != nil {
+		return err
+	}
+	binary, err := update.ExtractBinary(archive, "berth")
+	if err != nil {
+		return err
+	}
+	if err := update.Replace(self, binary); err != nil {
+		return fmt.Errorf("%w\n  (%s may need different permissions, or install.sh can put it elsewhere)", err, self)
+	}
+
+	fmt.Printf("installed %s to %s\n", rel.Tag, self)
+	fmt.Println("restart berth to use it")
+	return nil
+}
+
 func listSessions() error {
 	sessions, err := tmux.List()
 	if err != nil {
@@ -155,6 +210,7 @@ func printUsage() {
 usage:
   berth              launch the TUI
   berth ls           list sessions and exit
+  berth update       replace this binary with the newest release
   berth statusline   read Claude Code's status line payload on stdin, record
                      the rate limits for berth, and print a status line;
                      append -- and a command to pass the payload on to it

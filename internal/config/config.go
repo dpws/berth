@@ -65,6 +65,11 @@ type Config struct {
 	// HideTask drops the second line under each session that says what its
 	// agent was last asked to do.
 	HideTask bool `json:"hide_task"`
+	// CheckUpdates asks GitHub once a day whether there is a newer release and
+	// says so in the header. It is the only request berth makes on its own;
+	// nothing is sent but the ask, and nothing is ever installed without
+	// "berth update".
+	CheckUpdates bool `json:"check_updates"`
 	// HideWindowTitle stops berth naming the selected session in the
 	// terminal's title bar, for terminals or window managers where the title
 	// is set from elsewhere.
@@ -103,6 +108,7 @@ func Default() Config {
 		QuitKey:            "ctrl+x",
 		ClipAgentURL:       "http://127.0.0.1:8377",
 
+		CheckUpdates:        true,
 		UsageRefreshSeconds: 30,
 	}
 }

@@ -22,7 +22,14 @@ func (m *Model) sidebarLines(w, h int) []string {
 
 	header := titleStyle.Render("BERTH")
 	count := itemMutedStyle.Render(fmt.Sprintf(" %d", len(m.sessions)))
-	lines = append(lines, pad.Render(" "+header+count))
+	// A newer release is worth saying once and then leaving where it can be
+	// noticed, rather than only in a message that fades.
+	notice := ""
+	if m.newerVersion != "" {
+		notice = lipgloss.NewStyle().Foreground(colSuccess).
+			Render("  ↑" + m.newerVersion)
+	}
+	lines = append(lines, pad.Render(truncate(" "+header+count+notice, w)))
 	blank()
 	lines = append(lines, pad.Render(dividerStyle.Render(strings.Repeat("─", max(0, w)))))
 	blank()

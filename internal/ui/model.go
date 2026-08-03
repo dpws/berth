@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
+	"github.com/dpws/berth/internal/update"
 	"github.com/dpws/berth/internal/usage"
 )
 
@@ -148,6 +150,9 @@ type Model struct {
 	presetCursor int
 	// colorCursor is the palette entry highlighted while choosing a colour.
 	colorCursor int
+	// newerVersion is the tag of a release newer than this build, once the
+	// check has found one.
+	newerVersion string
 
 	// spinner advances the glyph on working sessions. It only ticks while
 	// something is working, so an idle berth redraws no more than before.
@@ -229,6 +234,9 @@ type statusTickMsg struct{}
 // spinnerTickMsg advances the glyph on working sessions.
 type spinnerTickMsg struct{}
 
+// updateMsg carries the tag of a newer release, when there is one.
+type updateMsg string
+
 // usageTickMsg drives the slow poll of the agents' rate limits.
 type usageTickMsg time.Time
 
@@ -254,6 +262,9 @@ func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{listSessions(), tickCmd(m.cfg.RefreshMillis)}
 	if m.usageTracker != nil {
 		cmds = append(cmds, m.readUsage())
+	}
+	if m.cfg.CheckUpdates {
+		cmds = append(cmds, checkForUpdate(Version))
 	}
 	return tea.Batch(cmds...)
 }
@@ -301,6 +312,19 @@ func (m *Model) readUsage() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg { return usageMsg(tracker.Refresh()) }
+}
+
+// Version is the build berth is running, set from main so the update check
+// and the header can see it.
+var Version = "dev"
+
+// checkForUpdate asks whether there is a newer release, off the update loop.
+// The answer is cached for a day, so this is usually no request at all, and a
+// failed check says nothing rather than complaining.
+func checkForUpdate(current string) tea.Cmd {
+	return func() tea.Msg {
+		return updateMsg(update.Available(context.Background(), current, ""))
+	}
 }
 
 // readAgents refreshes what each session's agent is doing. It reads small
@@ -422,6 +446,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case usageMsg:
 		m.usage = msg
 		return usageTickCmd(m.cfg.UsageRefreshSeconds)
+
+	case updateMsg:
+		if msg == "" {
+			return nil
+		}
+		m.newerVersion = string(msg)
+		m.setStatus(string(msg)+" is out - run berth update", false)
+		return nil
 
 	case sessionsMsg:
 		m.readAgents(msg)

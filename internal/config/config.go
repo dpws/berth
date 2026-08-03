@@ -64,7 +64,7 @@ func Default() Config {
 		RefreshMillis: 2000,
 		HideStatusBar: true,
 		Mouse:         true,
-		ImageDropDir:  dropDir(home),
+		ImageDropDir:  filepath.Join(home, "berth-drop"),
 		PasteImageKey: "ctrl+y",
 		ClipAgentURL:  "http://127.0.0.1:8377",
 	}
@@ -80,35 +80,13 @@ func ImageCacheDir() string {
 	return filepath.Join(dir, "berth", "images")
 }
 
-// dropDir keeps using a claudemux-era drop folder when one is already there,
-// so images you left in it do not silently stop being found.
-func dropDir(home string) string {
-	if legacy := filepath.Join(home, "claudemux-drop"); exists(legacy) {
-		return legacy
-	}
-	return filepath.Join(home, "berth-drop")
-}
-
-// Path returns the location berth reads its config from. A config written
-// before the rename from claudemux is used when no new one exists yet.
+// Path returns the location berth reads its config from.
 func Path() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return ""
 	}
-	path := filepath.Join(dir, "berth", "config.json")
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	if legacy := filepath.Join(dir, "claudemux", "config.json"); exists(legacy) {
-		return legacy
-	}
-	return path
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	return filepath.Join(dir, "berth", "config.json")
 }
 
 // Load reads the config file, falling back to defaults for anything missing.

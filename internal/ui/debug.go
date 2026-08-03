@@ -9,11 +9,7 @@ import (
 )
 
 func init() {
-	p := os.Getenv("BERTH_LOG")
-	if p == "" {
-		p = os.Getenv("CLAUDEMUX_LOG") // pre-rename name
-	}
-	if p != "" {
+	if p := os.Getenv("BERTH_LOG"); p != "" {
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err == nil {
 			log.SetOutput(f)

@@ -27,11 +27,6 @@ var Kinds = []string{KindClaude, KindCodex, KindShell}
 const (
 	optManaged = "@berth"
 	optKind    = "@berth_kind"
-
-	// Options written before the tool was renamed from claudemux. Sessions
-	// tagged with these are still running, so they are read but never written.
-	legacyOptManaged = "@claudemux"
-	legacyOptKind    = "@claudemux_kind"
 )
 
 // sep delimits fields in -F output. A raw tab is unambiguous: tmux escapes
@@ -51,8 +46,6 @@ var listFormat = strings.Join([]string{
 	"#{pane_current_command}",
 	"#{" + optManaged + "}",
 	"#{" + optKind + "}",
-	"#{" + legacyOptManaged + "}",
-	"#{" + legacyOptKind + "}",
 }, sep)
 
 // Session is a tmux session as berth cares about it.
@@ -119,7 +112,7 @@ func List() ([]Session, error) {
 			continue
 		}
 		f := strings.Split(line, sep)
-		if len(f) < 11 {
+		if len(f) < 9 {
 			continue
 		}
 		s := Session{
@@ -130,8 +123,8 @@ func List() ([]Session, error) {
 			Activity: unix(f[4]),
 			Dir:      f[5],
 			Command:  f[6],
-			Managed:  f[7] == "1" || f[9] == "1",
-			Kind:     firstNonEmpty(f[8], f[10]),
+			Managed:  f[7] == "1",
+			Kind:     f[8],
 		}
 		sessions = append(sessions, s)
 	}
@@ -272,16 +265,6 @@ func noServer(err error) bool {
 	return strings.Contains(s, "no server running") ||
 		strings.Contains(s, "no such file or directory") ||
 		strings.Contains(s, "error connecting")
-}
-
-// firstNonEmpty returns the first argument that is not empty.
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func atoi(s string) int {

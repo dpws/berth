@@ -125,6 +125,9 @@ func settingsList() []setting {
 		number("usage_refresh_seconds", "Limits poll", "Seconds between rate limit reads",
 			func(c config.Config) int { return c.UsageRefreshSeconds },
 			func(c *config.Config, n int) { c.UsageRefreshSeconds = n }),
+		number("git_refresh_seconds", "Git poll", "Seconds between reads of the branch and its changes",
+			func(c config.Config) int { return c.GitRefreshSeconds },
+			func(c *config.Config, n int) { c.GitRefreshSeconds = n }),
 
 		flag("mouse", "Mouse", "Click rows to switch, drag a session to copy",
 			"captured by berth", "left to the terminal",
@@ -134,6 +137,10 @@ func settingsList() []setting {
 			"hidden", "shown",
 			func(c config.Config) bool { return c.HideUsage },
 			func(c *config.Config, v bool) { c.HideUsage = v }),
+		flag("hide_git_bar", "Git bar", "Branch and uncommitted work, above the session",
+			"hidden", "shown",
+			func(c config.Config) bool { return c.HideGitBar },
+			func(c *config.Config, v bool) { c.HideGitBar = v }),
 		flag("hide_agent_status", "Agent status", "Working, waiting on you, idle",
 			"hidden", "shown",
 			func(c config.Config) bool { return c.HideAgentStatus },
@@ -448,6 +455,19 @@ func (m *Model) applyConfig() tea.Cmd {
 		m.usageTracker = usage.NewTracker()
 		m.usageGen++
 		cmds = append(cmds, m.readUsage())
+	}
+
+	// Turning the bar back on starts a fresh poll chain, and the generation
+	// bump retires whichever tick the old one left in flight rather than
+	// letting the two run side by side. The gitTicking guard is what keeps this
+	// from starting another chain every time any other setting is saved.
+	switch {
+	case m.cfg.HideGitBar:
+		m.gitStatus, m.gitDir, m.gitTicking = nil, "", false
+	case !m.gitTicking:
+		m.gitGen++
+		m.gitTicking = true
+		cmds = append(cmds, gitTickCmd(m.cfg.GitRefreshSeconds, m.gitGen))
 	}
 
 	switch {

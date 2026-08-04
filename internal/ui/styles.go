@@ -25,6 +25,10 @@ var (
 	// colIdle is the quiet end of the status colours: white on a dark
 	// terminal, and dark on a light one so it stays legible either way.
 	colIdle = lipgloss.AdaptiveColor{Light: "#3A3A3A", Dark: "#FFFFFF"}
+	// colBranch names the branch in the git bar. Yellow is the one hue the
+	// palette had not spent, so the branch reads as its own thing rather than
+	// as another session kind.
+	colBranch = lipgloss.AdaptiveColor{Light: "#8A6A1F", Dark: "#D8B863"}
 )
 
 var (

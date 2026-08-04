@@ -16,6 +16,7 @@ import (
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/clip"
 	"github.com/dpws/berth/internal/config"
+	"github.com/dpws/berth/internal/git"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/update"
@@ -134,6 +135,18 @@ type Model struct {
 	// keeps its place in their logs, so it is created once and reused.
 	agentWatcher *agent.Watcher
 	agents       map[string]agent.Info
+
+	// gitStatus is what the bar knows, by directory. It is kept per directory
+	// rather than only for the selection so that moving back to a session shows
+	// its branch at once instead of blanking until the next read lands.
+	// gitDir is the directory last asked about, and gitGen names the poll chain,
+	// the same way usageGen does.
+	// gitTicking says a poll chain is alive, so that saving some unrelated
+	// setting does not start a second one beside it.
+	gitStatus  map[string]gitEntry
+	gitDir     string
+	gitGen     int
+	gitTicking bool
 
 	// sel is the run of cells being dragged over the session, or the last one
 	// dragged. Selection is berth's own rather than the terminal's: the
@@ -256,6 +269,21 @@ type usageTickMsg struct{ gen int }
 
 type usageMsg map[string]usage.Limits
 
+// gitTickMsg drives the poll of the selected session's repository. Like
+// usageTickMsg it carries the generation that scheduled it, so a tick left in
+// flight by a chain that has since been replaced is dropped rather than
+// doubling the rate every time the bar is turned off and on again.
+type gitTickMsg struct{ gen int }
+
+// gitMsg is one directory's answer, named by the directory it is about: the
+// cursor can move while a read is in flight, and the reply has to be filed
+// under what was asked rather than under whatever is selected when it lands.
+type gitMsg struct {
+	dir    string
+	status git.Status
+	ok     bool
+}
+
 type attachMsg struct {
 	name string
 	gen  int
@@ -285,6 +313,10 @@ func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{listSessions(), tickCmd(m.cfg.RefreshMillis)}
 	if m.usageTracker != nil {
 		cmds = append(cmds, m.readUsage())
+	}
+	if !m.cfg.HideGitBar {
+		m.gitTicking = true
+		cmds = append(cmds, gitTickCmd(m.cfg.GitRefreshSeconds, m.gitGen))
 	}
 	if m.cfg.CheckUpdates {
 		cmds = append(cmds, checkForUpdate(Version))
@@ -326,6 +358,40 @@ func usageTickCmd(sec, gen int) tea.Cmd {
 	return tea.Tick(time.Duration(sec)*time.Second, func(time.Time) tea.Msg {
 		return usageTickMsg{gen: gen}
 	})
+}
+
+func gitTickCmd(sec, gen int) tea.Cmd {
+	if sec <= 0 {
+		sec = 5
+	}
+	return tea.Tick(time.Duration(sec)*time.Second, func(time.Time) tea.Msg {
+		return gitTickMsg{gen: gen}
+	})
+}
+
+// readGit reads one directory's repository state off the update loop, since it
+// shells out to git and walks a worktree.
+func readGit(dir string) tea.Cmd {
+	return func() tea.Msg {
+		st, ok := git.Read(dir)
+		return gitMsg{dir: dir, status: st, ok: ok}
+	}
+}
+
+// gitCmd reads the selected session's directory when the cursor has moved to a
+// different one than was last asked about. Riding on Update covers every way
+// the selection can change - a key, a click, a filter that leaves something
+// else selected - without each of them having to remember to ask.
+func (m *Model) gitCmd() tea.Cmd {
+	if m.cfg.HideGitBar {
+		return nil
+	}
+	dir := m.selectedDir()
+	if dir == "" || dir == m.gitDir {
+		return nil
+	}
+	m.gitDir = dir
+	return readGit(dir)
 }
 
 // readUsage re-reads the agents' logs off the update loop.
@@ -434,7 +500,7 @@ func waitForPane(p *term.Pane) tea.Cmd {
 // Update runs the message through the model, then keeps the terminal's title
 // in step with whatever the result left selected.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m, tea.Batch(m.update(msg), m.titleCmd(), m.statusCmd(), m.spinnerCmd())
+	return m, tea.Batch(m.update(msg), m.titleCmd(), m.statusCmd(), m.spinnerCmd(), m.gitCmd())
 }
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
@@ -472,6 +538,36 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case usageMsg:
 		m.usage = msg
 		return usageTickCmd(m.cfg.UsageRefreshSeconds, m.usageGen)
+
+	case gitTickMsg:
+		if m.cfg.HideGitBar {
+			// Only the current chain reports its own death: an older one is
+			// already dead and has no business clearing the flag for the chain
+			// that replaced it.
+			if msg.gen == m.gitGen {
+				m.gitTicking = false
+			}
+			return nil
+		}
+		if msg.gen != m.gitGen {
+			return nil // a chain that has been replaced
+		}
+		// The tick reschedules itself rather than waiting for the read it
+		// starts. A read is also fired whenever the cursor lands on a new
+		// directory, and if those replies scheduled ticks too there would soon
+		// be a chain per session visited.
+		next := gitTickCmd(m.cfg.GitRefreshSeconds, m.gitGen)
+		if m.gitDir == "" {
+			return next
+		}
+		return tea.Batch(next, readGit(m.gitDir))
+
+	case gitMsg:
+		if m.gitStatus == nil {
+			m.gitStatus = make(map[string]gitEntry)
+		}
+		m.gitStatus[msg.dir] = gitEntry{status: msg.status, ok: msg.ok}
+		return nil
 
 	case updateMsg:
 		if msg == "" {
@@ -657,15 +753,22 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	// Everything below the git bar sits one row lower than the screen says, so
+	// the offset comes off before any of this decides what was clicked.
+	top := m.topBarHeight()
+	if msg.Y < top {
+		return nil // the bar itself
+	}
+
 	sideW := m.sidebarWidth()
 	if msg.X < sideW {
-		return m.handleSidebarMouse(msg)
+		return m.handleSidebarMouse(msg, msg.Y-top)
 	}
 	if msg.X < sideW+1+gutter || m.pane == nil {
 		return nil // the divider and the blank column beside it
 	}
 
-	x, y := msg.X-sideW-1-gutter, msg.Y
+	x, y := msg.X-sideW-1-gutter, msg.Y-top
 	if y >= m.bodyHeight() {
 		return nil // the footer
 	}
@@ -717,9 +820,9 @@ func (m *Model) handleTerminalMouse(msg tea.MouseMsg, x, y int) tea.Cmd {
 				m.syncPaneFocus()
 			}
 			// The press was held in screen coordinates, so it crosses the same
-			// divider and gutter the release already did. Missing the gutter
-			// put the press one column right of the release beside it.
-			forward(press, press.X-m.sidebarWidth()-1-gutter, press.Y)
+			// divider, gutter and git bar the release already did. Missing the
+			// gutter put the press one column right of the release beside it.
+			forward(press, press.X-m.sidebarWidth()-1-gutter, press.Y-m.topBarHeight())
 			forward(msg, x, y)
 			return nil
 		}
@@ -771,7 +874,9 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-func (m *Model) handleSidebarMouse(msg tea.MouseMsg) tea.Cmd {
+// row is msg.Y already brought into the sidebar's own coordinates, which start
+// below the git bar rather than at the top of the screen.
+func (m *Model) handleSidebarMouse(msg tea.MouseMsg, row int) tea.Cmd {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		return m.moveCursor(-1)
@@ -782,10 +887,10 @@ func (m *Model) handleSidebarMouse(msg tea.MouseMsg) tea.Cmd {
 	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
 		return nil
 	}
-	if msg.Y < 0 || msg.Y >= len(m.rowSessions) {
+	if row < 0 || row >= len(m.rowSessions) {
 		return nil
 	}
-	target := m.rowSessions[msg.Y]
+	target := m.rowSessions[row]
 	if target < 0 {
 		return nil
 	}
@@ -1529,8 +1634,8 @@ func (m *Model) sidebarWidth() int {
 }
 
 // bodyHeight is the room left for the sidebar and the terminal once the rule
-// and the hotkey line beneath them are taken out.
-func (m *Model) bodyHeight() int { return max(1, m.height-2) }
+// and the hotkey line beneath them, and the git bar above them, are taken out.
+func (m *Model) bodyHeight() int { return max(1, m.height-2-m.topBarHeight()) }
 
 // gutter is the blank column between the divider and the session, so the
 // terminal's own output does not start hard against the line.
@@ -1581,6 +1686,19 @@ func (m *Model) View() string {
 	if m.clipboard != "" {
 		b.WriteString(m.clipboard)
 		m.clipboard = ""
+	}
+	// The bar above the body is split at the same column the body is, so its
+	// two halves sit over the list and over the session they describe.
+	if m.topBarHeight() > 0 {
+		b.WriteString(padTo(m.brandBar(sideW), sideW))
+		b.WriteString(div)
+		b.WriteString(gap)
+		b.WriteString(m.gitBarView(termW))
+		b.WriteString("\x1b[0m")
+		b.WriteByte('\n')
+		b.WriteString(m.topRule(sideW))
+		b.WriteString("\x1b[0m")
+		b.WriteByte('\n')
 	}
 	for i := 0; i < bodyH; i++ {
 		b.WriteString(sidebar[i])
@@ -1633,14 +1751,28 @@ func (m *Model) terminalLines(w, h int) []string {
 	return out
 }
 
+// topRule closes the bar off from the body, mirroring the rule at the foot of
+// the screen: same lit half, same join where the divider meets it, turned the
+// other way up. Without it the branch runs into the session's first line of
+// output, and berth's name sits straight on top of the list.
+func (m *Model) topRule(sideW int) string {
+	return m.rule(sideW, "┬")
+}
+
 // footerRule closes the two columns off above the hotkeys, meeting the divider
 // between them so the corner reads as one drawing rather than two lines that
 // happen to cross.
-//
-// The half of the rule under whichever column has the keyboard is lit, which
-// is the same question the words underneath answer - it is just quicker to
-// read a line than a sentence.
 func (m *Model) footerRule(sideW int) string {
+	return m.rule(sideW, "┴")
+}
+
+// rule draws one horizontal rule across the whole window, joined to the divider
+// between the two columns by join.
+//
+// The half of the rule beside whichever column has the keyboard is lit, which
+// is the same question the words at the foot of the screen answer - it is just
+// quicker to read a line than a sentence.
+func (m *Model) rule(sideW int, join string) string {
 	if m.width <= 0 {
 		return ""
 	}
@@ -1661,7 +1793,7 @@ func (m *Model) footerRule(sideW int) string {
 		corner = focusedDivStyle
 	}
 	return left.Render(strings.Repeat("─", sideW)) +
-		corner.Render("┴") +
+		corner.Render(join) +
 		right.Render(strings.Repeat("─", max(0, m.width-sideW-1)))
 }
 

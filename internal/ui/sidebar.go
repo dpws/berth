@@ -24,10 +24,9 @@ func (m *Model) sidebarLines(w, h int) []string {
 	m.rowSessions = make([]int, 0, h)
 	blank := func() { m.rowSessions = append(m.rowSessions, -1) }
 
-	lines = append(lines, pad.Render(m.headerLine(w)))
-	blank()
-	lines = append(lines, pad.Render(dividerStyle.Render(strings.Repeat("─", max(0, w)))))
-	blank()
+	// The title and the line under it are both in the strip above the body now,
+	// running the width of the window rather than this column, so the list
+	// starts straight in on the sessions.
 
 	if m.filter != "" {
 		lines = append(lines, pad.Render(" "+labelActiveStyle.Render("/")+itemStyle.Render(m.filter)))
@@ -86,10 +85,14 @@ func (m *Model) sidebarLines(w, h int) []string {
 	return lines[:h]
 }
 
-// headerLine is the top row: what this is and how many sessions on the left,
-// which build it is on the right. A newer release is named beside it, since a
-// message that fades is easy to miss.
-func (m *Model) headerLine(w int) string {
+// brandBar is the sidebar's half of the bar above the body: what this is and
+// how many sessions on the left, which build it is on the right. A newer
+// release is named beside it, since a message that fades is easy to miss.
+//
+// It mirrors the git bar across the divider, so the top of the window says
+// what berth is on one side and what the selected session is sitting in on the
+// other.
+func (m *Model) brandBar(w int) string {
 	left := titleStyle.Render("BERTH") +
 		itemMutedStyle.Render(fmt.Sprintf(" %d", len(m.sessions)))
 	leftW := 5 + 1 + len(fmt.Sprintf("%d", len(m.sessions)))

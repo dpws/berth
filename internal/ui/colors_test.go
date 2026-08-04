@@ -128,13 +128,13 @@ func TestHeaderVersionMarkers(t *testing.T) {
 	t.Cleanup(func() { Version = before })
 
 	Version = "v0.3.0"
-	if got := m.headerLine(28); !strings.Contains(got, faintStyle.Render("v0.3.0")) {
+	if got := m.brandBar(28); !strings.Contains(got, faintStyle.Render("v0.3.0")) {
 		t.Error("an up-to-date version is not drawn quietly")
 	}
 
 	m.newerVersion = "v0.4.0"
 	behind := lipgloss.NewStyle().Foreground(colDanger).Render("↑v0.3.0")
-	if got := m.headerLine(28); !strings.Contains(got, behind) {
+	if got := m.brandBar(28); !strings.Contains(got, behind) {
 		t.Error("a version behind a release is not drawn in red with an arrow")
 	}
 
@@ -142,7 +142,7 @@ func TestHeaderVersionMarkers(t *testing.T) {
 	// from source, so a "+" version never also carries an arrow.
 	Version = "v0.3.0-9-gabc-dirty"
 	m.newerVersion = ""
-	if got := ansi.Strip(m.headerLine(28)); !strings.Contains(got, "v0.3.0+") {
+	if got := ansi.Strip(m.brandBar(28)); !strings.Contains(got, "v0.3.0+") {
 		t.Errorf("header = %q, want the ahead-of-tag marker", got)
 	}
 }

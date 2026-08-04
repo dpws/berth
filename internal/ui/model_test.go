@@ -97,8 +97,14 @@ func TestSidebarAndTerminalFillTheScreen(t *testing.T) {
 		t.Fatalf("columns do not add up: %d + 1 + %d + %d != 100",
 			sideW, gutter, termW)
 	}
-	if termH != 28 {
+	// 30 rows, less the rule and the hotkey line under the body, and the bar
+	// and its own rule over it.
+	if termH != 26 {
 		t.Fatalf("terminal height should leave the rule and the hotkeys room, got %d", termH)
+	}
+	if m.topBarHeight()+termH+2 != 30 {
+		t.Fatalf("the rows do not add up: bar %d + body %d + footer 2 != 30",
+			m.topBarHeight(), termH)
 	}
 
 	lines := m.sidebarLines(sideW, m.bodyHeight())
@@ -126,7 +132,7 @@ func TestMouseSelectsSidebarRow(t *testing.T) {
 
 	m.Update(tea.MouseMsg{
 		X:      2,
-		Y:      row,
+		Y:      row + m.topBarHeight(), // rowSessions is indexed from below the bar
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
@@ -461,8 +467,15 @@ func withPane(t *testing.T, m *Model) {
 }
 
 // terminalPress builds a mouse event over the terminal half of the screen.
+// x and y are the pane's own coordinates; the git bar sits above the body, so
+// the screen row is that much further down.
 func terminalMouse(m *Model, x, y int, action tea.MouseAction, button tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{X: m.sidebarWidth() + 1 + gutter + x, Y: y, Action: action, Button: button}
+	return tea.MouseMsg{
+		X:      m.sidebarWidth() + 1 + gutter + x,
+		Y:      y + m.topBarHeight(),
+		Action: action,
+		Button: button,
+	}
 }
 
 // A drag over the session selects text; berth has the mouse, and the terminal
@@ -899,9 +912,9 @@ func TestHeaderShowsTheVersionOnTheRight(t *testing.T) {
 	t.Cleanup(func() { Version = before })
 	Version = "v0.3.0"
 
-	line := ansi.Strip(m.headerLine(28))
-	if ansi.StringWidth(m.headerLine(28)) != 28 {
-		t.Errorf("header is %d cells, want 28", ansi.StringWidth(m.headerLine(28)))
+	line := ansi.Strip(m.brandBar(28))
+	if ansi.StringWidth(m.brandBar(28)) != 28 {
+		t.Errorf("header is %d cells, want 28", ansi.StringWidth(m.brandBar(28)))
 	}
 	if !strings.HasPrefix(line, " BERTH 2") {
 		t.Errorf("header = %q, want the count on the left", line)
@@ -913,17 +926,17 @@ func TestHeaderShowsTheVersionOnTheRight(t *testing.T) {
 	// An update turns it into an arrow, which fits where a second version
 	// would not have.
 	m.newerVersion = "v0.4.0"
-	line = ansi.Strip(m.headerLine(28))
+	line = ansi.Strip(m.brandBar(28))
 	if !strings.HasSuffix(line, "↑v0.3.0") {
 		t.Errorf("header = %q, want the version marked as behind", line)
 	}
-	if ansi.StringWidth(m.headerLine(18)) != 18 {
+	if ansi.StringWidth(m.brandBar(18)) != 18 {
 		t.Error("the marked version does not fit a narrow sidebar")
 	}
 
 	// And a header with room for neither still fits its column.
 	for _, w := range []int{16, 12, 8, 4} {
-		if got := ansi.StringWidth(m.headerLine(w)); got > w {
+		if got := ansi.StringWidth(m.brandBar(w)); got > w {
 			t.Errorf("header at %d is %d cells", w, got)
 		}
 	}

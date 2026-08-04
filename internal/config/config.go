@@ -83,6 +83,14 @@ type Config struct {
 	// UsageRefreshSeconds is how often the limits are re-read. Reading them
 	// touches the agents' log files, so it is much slower than the tmux poll.
 	UsageRefreshSeconds int `json:"usage_refresh_seconds"`
+	// HideGitBar turns off the half of the bar above the session that says
+	// which branch its directory is on and what has changed there. The bar's
+	// other half, over the list, carries berth's own name and build and stays
+	// either way, so hiding this gives no room back.
+	HideGitBar bool `json:"hide_git_bar"`
+	// GitRefreshSeconds is how often that bar is re-read. Reading it walks the
+	// worktree, so like the rate limits it runs far slower than the tmux poll.
+	GitRefreshSeconds int `json:"git_refresh_seconds"`
 }
 
 // Default returns the configuration used when no config file exists.
@@ -117,6 +125,7 @@ func Default() Config {
 
 		CheckUpdates:        true,
 		UsageRefreshSeconds: 30,
+		GitRefreshSeconds:   5,
 	}
 }
 
@@ -234,6 +243,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.UsageRefreshSeconds <= 0 {
 		c.UsageRefreshSeconds = d.UsageRefreshSeconds
+	}
+	if c.GitRefreshSeconds <= 0 {
+		c.GitRefreshSeconds = d.GitRefreshSeconds
 	}
 	return c
 }

@@ -13,12 +13,12 @@ again, still running when you come back.
 
 ```
 ┌──────────────────┬─────────────────────────────────────┐
-│ BERTH 3          │ dpws@host:~/code/api $ claude       │
-│──────────────────│ ❯ refactor the request parser       │
-│  ◐ api    claude │                                     │
-│   refactor the … │ (live - type straight into it)      │
+│ BERTH 3      dev │ main  ↑1  ~2 +1  +47/-12            │
+│──────────────────┼─────────────────────────────────────│
+│  ◐ api    claude │ dpws@host:~/code/api $ claude       │
+│   refactor the … │ ❯ refactor the request parser       │
 │  ? web    codex  │                                     │
-│  ○ dots   bash   │                                     │
+│  ○ dots   bash   │ (live - type straight into it)      │
 │──────────────────│                                     │
 │ 5h  ▓▓▓░░░  28%  │                                     │
 └──────────────────┴─────────────────────────────────────┘
@@ -74,9 +74,10 @@ berth statusline     # Claude Code status line hook — see Rate limits
 
 ### Keys
 
-The list and the terminal take turns owning the keyboard — the lit half of the
-rule above the hotkeys shows which one has it. `ctrl+o` switches between them; while the terminal has focus **every other key goes to the
-session**, including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix. The
+The list and the terminal take turns owning the keyboard — the rules above and
+below the body are lit along whichever half has it. `ctrl+o` switches between
+them; while the terminal has focus **every other key goes to the session**,
+including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix. The
 exceptions are `ctrl+y` (paste an image) and `ctrl+x` (quit), which berth keeps
 for itself so they work without going back to the list first — both are
 configurable, and `ctrl+x` in particular is worth remapping if you run emacs in
@@ -165,7 +166,9 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "hide_task": false,
   "check_updates": true,
   "hide_window_title": false,
-  "usage_refresh_seconds": 30
+  "usage_refresh_seconds": 30,
+  "hide_git_bar": false,
+  "git_refresh_seconds": 5
 }
 ```
 
@@ -268,8 +271,6 @@ was last asked to do:
 
 ```
 ┌────────────────────────────┐
-│ BERTH 4                    │
-│────────────────────────────│
 │ ⠹ api               claude │
 │   rewrite the parser       │
 │ ? web                codex │
@@ -357,6 +358,46 @@ A build from source is never told it is out of date. `git describe` marks
 those, and such a build is usually ahead of the newest tag rather than behind
 it; being nagged to downgrade would be worse than being told nothing.
 
+## The bar above the session
+
+The top of the window is split the same way the body is. Over the list sits
+berth's own name, how many sessions there are and which build you are on; over
+the session sits the branch its directory is on and what has changed there.
+
+```
+ BERTH 3      dev │ main  ↑1 ↓2  ~3 +1 -1  +47/-12      ~/code/api
+──────────────────┼───────────────────────────────────────────────
+```
+
+| | |
+| --- | --- |
+| `main` | the branch, or the commit when the head is detached |
+| `↑1` `↓2` | commits your branch has that its upstream does not, and the other way round |
+| `~3` `+1` `-1` | files modified, added (untracked included) and deleted |
+| `+47/-12` | lines added and removed, **unstaged only** — what is still in front of you |
+
+Green is what you have, red is what you have not: commits you are ahead by and
+lines you have written are green, commits you are behind by and lines you have
+cut are red. Yellow is where you are and what you have touched — the branch and
+the files you have changed.
+
+Anything at zero is left out, so a clean branch level with its upstream shows
+just its name. The counts are there to be noticed, and noticing them depends on
+their being rare.
+
+The counts follow the cursor: each session has its own directory, so moving
+down the list re-reads whichever repository that session is sitting in. A
+directory that is not a repository keeps the row and shows only its path —
+the row does not come and go, because a bar that appeared and vanished as the
+cursor moved would resize the session underneath it every time.
+
+Reading is one `git status` and one `git diff --numstat`, every five seconds
+and on every move of the cursor, both with `GIT_OPTIONAL_LOCKS=0` so berth
+never takes the index lock out from under an agent running its own git in the
+same directory. `"git_refresh_seconds"` changes the interval and
+`"hide_git_bar": true` silences the half over the session — the half over the
+list stays either way, so hiding it gives no room back.
+
 ## Rate limits
 
 Select an agent session and the block above the legend says how much of its
@@ -364,8 +405,8 @@ rate limit is gone:
 
 ```
 ┌──────────────────┬─────────────────────────
-│ BERTH 3          │
-│──────────────────│
+│ BERTH 3      dev │ main  ↑1  ~2 +1
+│──────────────────┼─────────────────────────
 │  ● api    claude │
 │  ○ web    codex  │
 │──────────────────│

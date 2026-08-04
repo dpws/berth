@@ -54,6 +54,21 @@ type Info struct {
 	Detail string
 	// Updated is when the agent last wrote any of this down.
 	Updated time.Time
+	// Since is when the agent started doing what it is doing now, which is what
+	// "nothing has happened here for a while" actually means. Updated moves
+	// every time the agent writes a heartbeat, so it answers a different
+	// question: whether the record can still be believed.
+	Since time.Time
+}
+
+// Age is how long the agent has been in its current state, and whether that is
+// known at all. A session berth has only just noticed reports false rather than
+// a duration of zero, which would read as "just now".
+func (i Info) Age(now time.Time) (time.Duration, bool) {
+	if i.Since.IsZero() || i.Since.After(now) {
+		return 0, false
+	}
+	return now.Sub(i.Since), true
 }
 
 // Empty reports whether there is nothing to show.

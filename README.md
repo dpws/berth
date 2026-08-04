@@ -16,7 +16,7 @@ again, still running when you come back.
 │ BERTH 3      dev │ main  ↑1  ~2 +1  +47/-12            │
 │──────────────────┼─────────────────────────────────────│
 │  ◐ api    claude │ dpws@host:~/code/api $ claude       │
-│   refactor the … │ ❯ refactor the request parser       │
+│   refactor t… 4m │ ❯ refactor the request parser       │
 │  ? web    codex  │                                     │
 │  ○ dots   bash   │ (live - type straight into it)      │
 │──────────────────│                                     │
@@ -174,6 +174,7 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "hide_usage": false,
   "hide_agent_status": false,
   "hide_task": false,
+  "hide_agent_age": false,
   "check_updates": true,
   "hide_window_title": false,
   "usage_refresh_seconds": 30,
@@ -192,8 +193,8 @@ and hands the wheel to agents that want it. Set it to `[]` for none. `claude_com
 `claude --model opus` or a wrapper script if you like. `hide_status_bar` turns
 tmux's status line off in sessions berth creates, since the sidebar already
 says which session you are in; sessions created elsewhere are left alone.
-`hide_agent_status` and `hide_task` control the indicator and the task line —
-see *What each session is doing*. `quit_key` quits from anywhere, including while a session has the keyboard;
+`hide_agent_status`, `hide_task` and `hide_agent_age` control the indicator,
+the task line and the time on the end of it — see *What each session is doing*. `quit_key` quits from anywhere, including while a session has the keyboard;
 set it to `""` to hand the key back to your sessions, leaving `ctrl+o` then `q`
 as the way out. `hide_window_title` stops berth naming the selected session in
 the terminal's title bar — by default the tab reads `api (claude) — berth` and
@@ -330,10 +331,24 @@ updated, so in a session that has moved on to its third piece of work it is
 simply wrong. berth tracks the newest prompt instead, and falls back to the
 title only when there is no prompt yet.
 
-A killed agent leaves its status file behind saying `busy`, so anything not
-written to for ten minutes is ignored rather than shown as working forever.
-Set `"hide_agent_status": true` to drop the indicator and the title marker, or
-`"hide_task": true` to keep the indicator and drop the second line.
+**How long it has been doing that** sits on the right of the same row: `12m`
+beside what a session is waiting for says it has been blocked on you since
+before lunch, not that it has just asked. It is the time in the *current* state
+— since the turn began for a session that is working, since it ended for one
+that is idle — rather than the time since the agent last wrote anything down,
+which for a session mid-turn is always "now". Seconds, then minutes, then hours,
+then days, rounded to whichever it is on.
+
+A killed agent leaves its status file behind saying `busy`, so a status
+claiming work that has not been written to for ten minutes is ignored rather
+than shown as working forever. An agent sitting idle is the other way round: it
+stops writing its file altogether, so berth keeps that record for as long as
+the process is there — which is what lets a session say `3h` instead of
+quietly losing its task ten minutes in.
+
+Set `"hide_agent_status": true` to drop the indicator and the title marker,
+`"hide_task": true` to keep the indicator and drop the second line, or
+`"hide_agent_age": true` to keep the line and drop the time from it.
 
 Messages along the bottom — `created api`, `copied 2 lines`, a tmux error —
 hold for a few seconds and then fade out, giving the row back to the key hints.

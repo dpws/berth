@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -204,7 +205,25 @@ func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
 		// standing between you and the session continuing.
 		text = info.Detail
 	}
-	if text == "" {
+
+	// How long it has been doing that, on the right of the same row: the pair
+	// reads as one sentence, and a session that has been waiting on you for an
+	// hour says so rather than looking like one that just asked.
+	age := ""
+	if !m.cfg.HideAgentAge {
+		if d, ok := info.Age(m.now()); ok {
+			age = shortAge(d)
+		}
+	}
+
+	// Indented to sit under the name rather than the status glyph.
+	const indent = 3
+	room := max(1, w-indent-1)
+	if age != "" {
+		room = max(1, room-lipgloss.Width(age)-1)
+	}
+
+	if text == "" && age == "" {
 		// A blank row, not no row: the space is held so nothing below it moves.
 		if selected {
 			return itemSelectedStyle.Render(padTo("", w))
@@ -212,13 +231,43 @@ func (m *Model) taskLine(s tmux.Session, selected bool, w int) string {
 		return strings.Repeat(" ", max(1, w))
 	}
 
-	// Indented to sit under the name rather than the status glyph.
-	const indent = 3
-	body := truncate(text, max(1, w-indent-1))
-	if selected {
-		return itemSelectedStyle.Render(padTo(strings.Repeat(" ", indent)+body, w))
+	body := truncate(text, room)
+	gap := max(1, w-indent-lipgloss.Width(body)-lipgloss.Width(age)-1)
+	if age == "" {
+		gap = 0
 	}
-	return strings.Repeat(" ", indent) + faintStyle.Render(body)
+	if selected {
+		return itemSelectedStyle.Render(padTo(
+			strings.Repeat(" ", indent)+body+strings.Repeat(" ", gap)+age, w))
+	}
+	return strings.Repeat(" ", indent) +
+		faintStyle.Render(body) +
+		strings.Repeat(" ", gap) +
+		faintStyle.Render(age)
+}
+
+// now is the time the view should render against.
+func (m *Model) now() time.Time {
+	if m.clock == nil {
+		return time.Now()
+	}
+	return m.clock()
+}
+
+// shortAge writes a duration in the fewest characters that still say which
+// scale it is on: seconds up to a minute, then minutes, then hours, then days.
+// It is a glance at the corner of a row, so a rounded "2h" beats "2h13m".
+func shortAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", max(0, int(d.Seconds())))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours())/24)
+	}
 }
 
 // sessionLine renders one row: marker, status dot, name, and a right-aligned

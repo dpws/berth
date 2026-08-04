@@ -20,6 +20,15 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+// testClaudeWatcher is the watcher with every process it hears about taken to
+// be running, since the tests describe processes they have not started. The
+// liveness check itself is exercised on its own below.
+func testClaudeWatcher(root string) *claudeWatcher {
+	w := newClaudeWatcher(root)
+	w.alive = func(int) bool { return true }
+	return w
+}
+
 // statusFile writes the file Claude Code keeps for a running process.
 func statusFile(t *testing.T, root string, pid int, sessionID, cwd, status string, age time.Duration) {
 	t.Helper()
@@ -46,7 +55,7 @@ func TestClaudeStatusAndTask(t *testing.T) {
 		`{"type":"last-prompt","lastPrompt":"add a quit hotkey"}`,
 		`{"type":"last-prompt","lastPrompt":"now update the tab title"}`)
 
-	w := newClaudeWatcher(root)
+	w := testClaudeWatcher(root)
 	out := map[string]Info{}
 	w.refresh([]tmux.Session{{Name: "api", PanePID: 4242, Dir: "/work/api"}}, out)
 
@@ -67,7 +76,7 @@ func TestClaudeFallsBackToAITitle(t *testing.T) {
 	transcriptFile(t, root, "sess-b", `{"type":"ai-title","aiTitle":"Rewrite the installer"}`)
 
 	out := map[string]Info{}
-	newClaudeWatcher(root).refresh([]tmux.Session{{Name: "x", PanePID: 7}}, out)
+	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "x", PanePID: 7}}, out)
 
 	if got := out["x"].Task; got != "Rewrite the installer" {
 		t.Errorf("Task = %q, want the title when no prompt was recorded", got)
@@ -82,7 +91,7 @@ func TestClaudeMatchesByDirectoryWhenPIDDiffers(t *testing.T) {
 	transcriptFile(t, root, "sess-c", `{"type":"last-prompt","lastPrompt":"ship it"}`)
 
 	out := map[string]Info{}
-	newClaudeWatcher(root).refresh(
+	testClaudeWatcher(root).refresh(
 		[]tmux.Session{{Name: "api", PanePID: 12345, Dir: "/work/api"}}, out)
 
 	if got := out["api"].Status; got != Waiting {
@@ -97,10 +106,82 @@ func TestClaudeIgnoresStaleStatusFiles(t *testing.T) {
 	statusFile(t, root, 4242, "sess-d", "/work/api", "busy", staleAfter+time.Minute)
 
 	out := map[string]Info{}
-	newClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
 
 	if _, ok := out["api"]; ok {
 		t.Errorf("a stale status file was reported: %+v", out["api"])
+	}
+}
+
+// An agent sitting idle stops writing its file, so going quiet is what idle
+// looks like. Dropping the record on a clock would lose the session's task and
+// the very age worth reporting, exactly when it has grown interesting.
+func TestClaudeKeepsQuietIdleSessions(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 4242, "sess-i", "/work/api", "idle", 3*time.Hour)
+
+	out := map[string]Info{}
+	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+
+	got, ok := out["api"]
+	if !ok {
+		t.Fatal("an idle session that had been quiet a while was dropped")
+	}
+	if got.Status != Idle {
+		t.Errorf("Status = %q, want idle", got.Status)
+	}
+	age, known := got.Age(time.Now())
+	if !known || age < 2*time.Hour {
+		t.Errorf("Age = %v (known %v), want about three hours", age, known)
+	}
+}
+
+// The clock no longer decides whether an idle record is believed, so something
+// has to: a file whose process has gone is a leftover.
+func TestClaudeDropsFilesFromDeadProcesses(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 4242, "sess-j", "/work/api", "idle", time.Minute)
+
+	w := newClaudeWatcher(root)
+	w.alive = func(int) bool { return false }
+	out := map[string]Info{}
+	w.refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+
+	if _, ok := out["api"]; ok {
+		t.Errorf("a file left by a dead process was reported: %+v", out["api"])
+	}
+}
+
+func TestProcessAlive(t *testing.T) {
+	if !processAlive(os.Getpid()) {
+		t.Error("this test's own process was reported dead")
+	}
+	// Pid 1 is always there and is never ours, so it is the case where the
+	// answer arrives as a permission error rather than a success.
+	if !processAlive(1) {
+		t.Error("pid 1 was reported dead")
+	}
+	if processAlive(0) || processAlive(-1) {
+		t.Error("a pid that cannot name a process was reported alive")
+	}
+}
+
+// The age is how long the agent has been doing this, not how long ago it last
+// wrote anything down: those differ for a session that is still working.
+func TestClaudeAgeIsTimeInTheCurrentStatus(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	writeFile(t, filepath.Join(root, "sessions", "4242.json"), fmt.Sprintf(
+		`{"pid":4242,"sessionId":"sess-k","cwd":"/w","status":"busy",`+
+			`"updatedAt":%d,"statusUpdatedAt":%d}`,
+		now.UnixMilli(), now.Add(-20*time.Minute).UnixMilli()))
+
+	out := map[string]Info{}
+	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+
+	age, ok := out["api"].Age(now)
+	if !ok || age < 19*time.Minute || age > 21*time.Minute {
+		t.Errorf("Age = %v (known %v), want about twenty minutes", age, ok)
 	}
 }
 
@@ -110,7 +191,7 @@ func TestClaudeTaskFollowsNewPrompts(t *testing.T) {
 	path := filepath.Join(root, "projects", "-proj", "sess-e.jsonl")
 	transcriptFile(t, root, "sess-e", `{"type":"last-prompt","lastPrompt":"first task"}`)
 
-	w := newClaudeWatcher(root)
+	w := testClaudeWatcher(root)
 	sessions := []tmux.Session{{Name: "s", PanePID: 5}}
 	out := map[string]Info{}
 	w.refresh(sessions, out)
@@ -172,6 +253,40 @@ func TestCodexTracksTurnsAndPrompts(t *testing.T) {
 	w.refresh(sessions, out)
 	if got := out["web"].Status; got != Idle {
 		t.Errorf("Status = %q, want idle after task_complete", got)
+	}
+}
+
+// A rollout is written to all through a turn, so the last line in it is not the
+// age of anything. The age runs from where the turn started, and once the turn
+// is over, from where it ended.
+func TestCodexAgeRunsFromTheTurnBoundary(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "r.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
+			codexEvent(ago(30*time.Minute), `{"type":"task_started"}`)+"\n"+
+			codexEvent(ago(8*time.Minute), `{"type":"agent_message","message":"still going"}`)+"\n")
+
+	w := newCodexWatcher(root)
+	sessions := []tmux.Session{{Name: "web", Dir: "/work/web"}}
+	out := map[string]Info{}
+	w.refresh(sessions, out)
+
+	age, ok := out["web"].Age(time.Now())
+	if !ok || age < 29*time.Minute || age > 31*time.Minute {
+		t.Errorf("busy age = %v (known %v), want the half hour since the turn began", age, ok)
+	}
+
+	writeFile(t, filepath.Join(root, "r.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/work/web"}}`+"\n"+
+			codexEvent(ago(30*time.Minute), `{"type":"task_started"}`)+"\n"+
+			codexEvent(ago(8*time.Minute), `{"type":"agent_message","message":"still going"}`)+"\n"+
+			codexEvent(ago(5*time.Minute), `{"type":"task_complete"}`)+"\n")
+
+	out = map[string]Info{}
+	w.refresh(sessions, out)
+	age, ok = out["web"].Age(time.Now())
+	if !ok || age < 4*time.Minute || age > 6*time.Minute {
+		t.Errorf("idle age = %v (known %v), want the time since the turn ended", age, ok)
 	}
 }
 

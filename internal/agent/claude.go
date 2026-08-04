@@ -2,18 +2,27 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/dpws/berth/internal/jsonl"
 	"github.com/dpws/berth/internal/tmux"
 )
 
-// staleAfter is how long a status file is believed. Claude Code removes its
-// file on exit, but a killed process leaves one behind saying "busy" forever.
+// staleAfter is how long a status file claiming work is believed. Claude Code
+// removes its file on exit, but a killed process leaves one behind saying
+// "busy" forever.
+//
+// It applies to work only. An agent sitting idle stops writing its file
+// entirely, so the record going quiet is what idle looks like rather than a
+// sign it has died - and how long ago it went quiet is exactly the thing worth
+// reporting. Whether the process is still there answers that better than a
+// clock does; see processAlive.
 const staleAfter = 10 * time.Minute
 
 // claudeStatus is the status file Claude Code keeps at
@@ -34,6 +43,9 @@ type claudeWatcher struct {
 	// tasks caches the last prompt seen in each transcript, along with how far
 	// into the file that reading got.
 	tasks map[string]*transcript
+	// alive reports whether a process is still running. It is a field so tests
+	// can describe processes they have not started.
+	alive func(pid int) bool
 }
 
 type transcript struct {
@@ -43,7 +55,26 @@ type transcript struct {
 }
 
 func newClaudeWatcher(root string) *claudeWatcher {
-	return &claudeWatcher{root: root, tasks: make(map[string]*transcript)}
+	return &claudeWatcher{
+		root:  root,
+		tasks: make(map[string]*transcript),
+		alive: processAlive,
+	}
+}
+
+// processAlive reports whether a pid is still running. Signal 0 is the ordinary
+// way to ask: it delivers nothing and only reports whether it could have.
+// "Not permitted" is a yes - the process is there, it just is not ours.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = p.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM)
 }
 
 func (w *claudeWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
@@ -67,10 +98,18 @@ func (w *claudeWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 			continue
 		}
 
+		// Since comes from the status timestamp alone: it is the one that stays
+		// put while the agent keeps doing the same thing, which is what makes
+		// it an age rather than a heartbeat.
+		since := msTime(st.StatusAt)
+		if since.IsZero() {
+			since = msTime(st.UpdatedAt)
+		}
 		info := Info{
 			Status:  claudeStatusOf(st.Status),
 			Detail:  cleanTask(st.WaitingFor),
 			Updated: msTime(maxInt64(st.StatusAt, st.UpdatedAt)),
+			Since:   since,
 		}
 		if path := w.transcriptPath(st.SessionID); path != "" {
 			live[path] = true
@@ -116,7 +155,15 @@ func (w *claudeWatcher) readStatuses() (map[int]claudeStatus, map[string]claudeS
 			// The file is named for the pid, so recover it if the body lacks one.
 			st.PID, _ = strconv.Atoi(strings.TrimSuffix(e.Name(), ".json"))
 		}
-		if updated := msTime(maxInt64(st.StatusAt, st.UpdatedAt)); updated.Before(cutoff) {
+		// A file whose process has gone is a leftover whatever it says, and one
+		// whose process is still there is the truth however long ago it was
+		// written. The clock is only the fallback, for a status claiming work
+		// from a process berth cannot ask about.
+		if !w.alive(st.PID) {
+			continue
+		}
+		updated := msTime(maxInt64(st.StatusAt, st.UpdatedAt))
+		if claudeStatusOf(st.Status).Active() && updated.Before(cutoff) {
 			continue
 		}
 		byPID[st.PID] = st

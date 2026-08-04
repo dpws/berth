@@ -310,6 +310,92 @@ func TestTaskRowIsHeldForAgentsAndNotForShells(t *testing.T) {
 	}
 }
 
+// How long an agent has been at something is the other half of what the task
+// row says, so it sits on the right of it rather than anywhere else.
+func TestTaskRowSaysHowLongTheAgentHasBeenAtIt(t *testing.T) {
+	m := newTestModel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	agentSession := tmux.Session{Name: "api", Kind: tmux.KindClaude}
+	withAgents(m, map[string]agent.Info{"api": {
+		Status: agent.Waiting,
+		Detail: "may I run git push",
+		Since:  now.Add(-12 * time.Minute),
+	}})
+
+	line := ansi.Strip(m.taskLine(agentSession, false, 40))
+	if !strings.HasSuffix(strings.TrimRight(line, " "), "12m") {
+		t.Errorf("task row = %q, want it ending in the age", line)
+	}
+	if !strings.Contains(line, "may I run git push") {
+		t.Errorf("task row = %q, want what it is waiting for still on it", line)
+	}
+
+	// A session berth has only just noticed has no age to give, and must not
+	// invent one that reads as "just now".
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy, Task: "a task"}})
+	if got := ansi.Strip(m.taskLine(agentSession, false, 40)); strings.Contains(got, "0s") {
+		t.Errorf("task row = %q, want no age when none is known", got)
+	}
+
+	m.cfg.HideAgentAge = true
+	withAgents(m, map[string]agent.Info{"api": {
+		Status: agent.Busy, Task: "a task", Since: now.Add(-time.Hour),
+	}})
+	if got := ansi.Strip(m.taskLine(agentSession, false, 40)); strings.Contains(got, "1h") {
+		t.Errorf("hide_agent_age still drew the age: %q", got)
+	}
+}
+
+// The age has to fit beside the task rather than push the row past the sidebar,
+// which would spill the list into the terminal next to it.
+func TestTaskRowKeepsItsWidthWithAnAge(t *testing.T) {
+	m := newTestModel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	agentSession := tmux.Session{Name: "api", Kind: tmux.KindClaude}
+	withAgents(m, map[string]agent.Info{"api": {
+		Status: agent.Busy,
+		Task:   strings.Repeat("long ", 40),
+		Since:  now.Add(-73 * time.Hour),
+	}})
+
+	for _, w := range []int{16, 20, 28, 40} {
+		for _, selected := range []bool{false, true} {
+			got := ansi.Strip(m.taskLine(agentSession, selected, w))
+			if ansi.StringWidth(got) > w {
+				t.Errorf("width %d selected %v: row is %d cells: %q",
+					w, selected, ansi.StringWidth(got), got)
+			}
+			if !strings.Contains(got, "3d") {
+				t.Errorf("width %d selected %v: age missing from %q", w, selected, got)
+			}
+		}
+	}
+}
+
+func TestShortAge(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{45 * time.Second, "45s"},
+		{90 * time.Second, "1m"},
+		{59 * time.Minute, "59m"},
+		{time.Hour + 30*time.Minute, "1h"},
+		{23 * time.Hour, "23h"},
+		{50 * time.Hour, "2d"},
+	}
+	for _, c := range cases {
+		if got := shortAge(c.d); got != c.want {
+			t.Errorf("shortAge(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
 // Task lines make a session take two rows, so scrolling and click mapping both
 // have to work in rows rather than in sessions.
 func TestListScrollsByRowAndKeepsTheCursorVisible(t *testing.T) {

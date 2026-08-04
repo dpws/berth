@@ -138,6 +138,10 @@ type Model struct {
 	agentWatcher *agent.Watcher
 	agents       map[string]agent.Info
 
+	// clock is what the view asks for the time, so a test can render an age
+	// without racing the wall. Nil means the wall clock.
+	clock func() time.Time
+
 	// gitStatus is what the bar knows, by directory. It is kept per directory
 	// rather than only for the selection so that moving back to a session shows
 	// its branch at once instead of blanking until the next read lands.
@@ -2170,11 +2174,16 @@ func (m *Model) helpText() string {
 	}
 	if !m.cfg.HideAgentStatus {
 		b.WriteString("\n")
-		for _, r := range [][2]string{
+		glyphs := [][2]string{
 			{"◐", "the agent is working"},
 			{"▲", "the agent is waiting on you"},
 			{"○", "idle, or no client attached"},
-		} {
+		}
+		if !m.cfg.HideAgentAge && !m.cfg.HideTask {
+			glyphs = append(glyphs,
+				[2]string{"12m", "how long it has been doing that"})
+		}
+		for _, r := range glyphs {
 			b.WriteString(fmt.Sprintf("%s  %s\n",
 				footerKeyStyle.Render(padTo(r[0], 12)), footerStyle.Render(r[1])))
 		}

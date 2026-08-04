@@ -32,6 +32,10 @@ type rollout struct {
 	// task_complete after it.
 	working bool
 	updated time.Time
+	// since is when working last changed - the start of the turn, or the end of
+	// the last one. A rollout is written to throughout a turn, so updated says
+	// only that Codex is still there.
+	since time.Time
 }
 
 func newCodexWatcher(root string) *codexWatcher {
@@ -82,7 +86,13 @@ func (w *codexWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 		if r.working && time.Since(r.updated) < staleAfter {
 			status = Busy
 		}
-		out[s.Name] = Info{Status: status, Task: r.task, Updated: r.updated}
+		// A turn abandoned mid-flight is reported idle, and its start is not
+		// the age of that idleness; the last thing the rollout recorded is.
+		since := r.since
+		if status == Idle && r.working {
+			since = r.updated
+		}
+		out[s.Name] = Info{Status: status, Task: r.task, Updated: r.updated, Since: since}
 	}
 }
 
@@ -131,8 +141,14 @@ func (w *codexWatcher) read(path string) *rollout {
 				r.task = m
 			}
 		case rec.Payload.Type == "task_started":
+			if !r.working {
+				r.since = rec.Timestamp
+			}
 			r.working = true
 		case rec.Payload.Type == "task_complete":
+			if r.working {
+				r.since = rec.Timestamp
+			}
 			r.working = false
 		}
 	})

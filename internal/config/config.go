@@ -76,6 +76,9 @@ type Config struct {
 	// HideTask drops the second line under each session that says what its
 	// agent was last asked to do.
 	HideTask bool `json:"hide_task"`
+	// HideAgentAge drops the how-long-it-has-been-doing-that time from the
+	// right of that line.
+	HideAgentAge bool `json:"hide_agent_age"`
 	// CheckUpdates asks GitHub once a day whether there is a newer release and
 	// says so in the header. It is the only request berth makes on its own;
 	// nothing is sent but the ask, and nothing is ever installed without

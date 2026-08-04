@@ -1673,10 +1673,16 @@ func (m *Model) View() string {
 	sidebar := m.sidebarLines(sideW, bodyH)
 	terminal := m.terminalLines(termW, termH)
 
-	div := dividerStyle.Render("│")
+	divStyle := dividerStyle
 	if m.focus == focusTerminal {
-		div = focusedDivStyle.Render("│")
+		divStyle = focusedDivStyle
 	}
+	div := divStyle.Render("│")
+	// Where one of the list's own rules reaches the divider, the divider is
+	// drawn as a join instead. A plain "│" leaves the two lines a half cell
+	// apart - the rule ends at the edge of its cell and the stroke stands in the
+	// middle of the next one - which reads as a gap rather than a corner.
+	divJoin := divStyle.Render("┤")
 
 	gap := strings.Repeat(" ", gutter)
 
@@ -1702,7 +1708,11 @@ func (m *Model) View() string {
 	}
 	for i := 0; i < bodyH; i++ {
 		b.WriteString(sidebar[i])
-		b.WriteString(div)
+		if isSidebarRule(sidebar[i]) {
+			b.WriteString(divJoin)
+		} else {
+			b.WriteString(div)
+		}
 		b.WriteString(gap)
 		b.WriteString(terminal[i])
 		b.WriteString("\x1b[0m")
@@ -1752,11 +1762,15 @@ func (m *Model) terminalLines(w, h int) []string {
 }
 
 // topRule closes the bar off from the body, mirroring the rule at the foot of
-// the screen: same lit half, same join where the divider meets it, turned the
-// other way up. Without it the branch runs into the session's first line of
-// output, and berth's name sits straight on top of the list.
+// the screen: same lit half, same meeting with the divider. Without it the
+// branch runs into the session's first line of output, and berth's name sits
+// straight on top of the list.
+//
+// The join is a cross rather than a tee, because unlike the rule at the foot of
+// the screen this one has the divider running on both sides of it: the bar
+// above is split by it too. A tee left the stroke above hanging.
 func (m *Model) topRule(sideW int) string {
-	return m.rule(sideW, "┬")
+	return m.rule(sideW, "┼")
 }
 
 // footerRule closes the two columns off above the hotkeys, meeting the divider

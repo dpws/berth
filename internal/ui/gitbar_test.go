@@ -342,10 +342,14 @@ func TestAheadAndBehindDoNotShareAColour(t *testing.T) {
 	}
 }
 
-// The strip is closed off by a rule the width of the window, joined to the
-// divider between the columns - the one at the foot of the screen turned the
-// other way up.
-func TestTopRuleMirrorsTheFooterRule(t *testing.T) {
+// The strip is closed off by a rule the width of the window, meeting the
+// divider between the columns.
+//
+// The two rules join that divider differently, and have to: the divider runs
+// above and below the top rule - the bar itself is split by it - so that one
+// crosses, while nothing sits below the footer rule and that one tees. A tee at
+// the top leaves the stroke above it hanging half a cell short.
+func TestTheRulesJoinTheDividerTheyMeet(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha"))
 	sideW := m.sidebarWidth()
@@ -353,19 +357,81 @@ func TestTopRuleMirrorsTheFooterRule(t *testing.T) {
 	top := ansi.Strip(m.topRule(sideW))
 	foot := ansi.Strip(m.footerRule(sideW))
 
-	if ansi.StringWidth(top) != m.width {
-		t.Errorf("the rule is %d cells, want the window's %d",
-			ansi.StringWidth(top), m.width)
+	for _, r := range []struct {
+		name string
+		line string
+		join rune
+	}{
+		{"top rule", top, '┼'},
+		{"footer rule", foot, '┴'},
+	} {
+		if ansi.StringWidth(r.line) != m.width {
+			t.Errorf("the %s is %d cells, want the window's %d",
+				r.name, ansi.StringWidth(r.line), m.width)
+		}
+		if got := []rune(r.line)[sideW]; got != r.join {
+			t.Errorf("the %s joins the divider with %q, want %q", r.name, got, r.join)
+		}
 	}
-	if got := []rune(top)[sideW]; got != '┬' {
-		t.Errorf("the rule joins the divider with %q, want ┬", got)
+
+	// Apart from the join they are the one drawing, so the frame reads as a
+	// single box rather than two lines that happen to be the same length.
+	if strings.ReplaceAll(top, "┼", "") != strings.ReplaceAll(foot, "┴", "") {
+		t.Errorf("the rules are not otherwise the same:\n  %q\n  %q", top, foot)
 	}
-	if got := []rune(foot)[sideW]; got != '┴' {
-		t.Errorf("the footer rule joins with %q, want ┴", got)
+}
+
+// Where one of the list's own rules reaches the divider, the divider is drawn
+// as a join too, or the two lines stop half a cell apart and read as a gap.
+func TestTheListsOwnRulesMeetTheDivider(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+
+	rows := strings.Split(m.View(), "\n")
+	sideW := m.sidebarWidth()
+
+	var joined int
+	for i, row := range rows {
+		cells := []rune(ansi.Strip(row))
+		if len(cells) <= sideW {
+			continue
+		}
+		// A row whose sidebar half is all rule must carry the join.
+		if strings.Trim(string(cells[:sideW]), "─") != "" {
+			continue
+		}
+		// Any of the joins will do - the rules that span the whole window carry
+		// their own. What must not be there is a bare "│".
+		if got := cells[sideW]; !strings.ContainsRune("┤┼┴┬", got) {
+			t.Errorf("row %d: the list rule meets the divider at %q, want a join", i, got)
+		} else {
+			joined++
+		}
 	}
-	// Same drawing, only the join differs.
-	if strings.ReplaceAll(top, "┬", "") != strings.ReplaceAll(foot, "┴", "") {
-		t.Errorf("the two rules are not mirrors:\n  %q\n  %q", top, foot)
+	if joined == 0 {
+		t.Fatal("no rule met the divider at all, so this proved nothing")
+	}
+}
+
+// The predicate is what decides whether a row gets a join, so it has to say no
+// to everything that merely contains a rule character.
+func TestOnlyWholeRulesCountAsRules(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"──────────", true},
+		{dividerStyle.Render("──────────"), true},
+		{"────────  ", true}, // padded out to the column's width
+		{"", false},
+		{"          ", false},
+		{" 5h  ▓▓▓░░░  28%", false},
+		{" resets 14:20", false},
+		{"─ not a rule ─", false},
+	} {
+		if got := isSidebarRule(tc.line); got != tc.want {
+			t.Errorf("isSidebarRule(%q) = %v, want %v", ansi.Strip(tc.line), got, tc.want)
+		}
 	}
 }
 
@@ -386,7 +452,7 @@ func TestTopRuleFollowsFocus(t *testing.T) {
 	if strings.Contains(m.topRule(sideW), lit) {
 		t.Error("the rule over the list stayed lit after focus moved to the session")
 	}
-	if !strings.Contains(m.topRule(sideW), focusedDivStyle.Render("┬")) {
+	if !strings.Contains(m.topRule(sideW), focusedDivStyle.Render("┼")) {
 		t.Error("the join went dim while the divider below it was lit")
 	}
 }

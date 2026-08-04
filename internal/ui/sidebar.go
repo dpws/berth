@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/tmux"
 )
@@ -12,6 +13,20 @@ import (
 // minListRows is what the session list keeps for itself before the usage block
 // is offered anything. A session takes two rows, so this is one of them.
 const minListRows = 2
+
+// isSidebarRule reports whether a rendered sidebar row is one of the list's own
+// horizontal rules - the lines above the rate limit block and above the legend.
+// They are the only rows made of nothing but the rule character, and where one
+// reaches the divider the divider has to be drawn as a join for the two to meet.
+//
+// This asks the drawn row rather than being told, so a rule added anywhere in
+// the sidebar joins up without having to remember to say so. The rows are a few
+// dozen cells wide and there are a few dozen of them, so the scan costs nothing
+// worth arranging around.
+func isSidebarRule(line string) bool {
+	s := strings.TrimRight(ansi.Strip(line), " ")
+	return s != "" && strings.Trim(s, "─") == ""
+}
 
 // sidebarLines renders the session list as exactly h lines, each exactly w
 // cells wide.

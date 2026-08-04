@@ -296,6 +296,7 @@ func runCmd(name string, args ...string) ([]byte, error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout, cmd.Stderr = out, &stderr
+	hideWindow(cmd)
 	err := cmd.Run()
 
 	if ctx.Err() != nil {

@@ -195,3 +195,39 @@ func TestALeftOutFindingIsCountedOut(t *testing.T) {
 		t.Errorf("the dialog does not say how many there really are:\n%s", body)
 	}
 }
+
+// A paste that arrived with nothing in it is what a terminal sends when its own
+// paste key was pressed over a clipboard holding no text - an image, most
+// often. That is the one thing berth can fetch and the terminal cannot, and on
+// Windows Terminal, which keeps ctrl+v for itself, it is the only way the key
+// reaches berth at all.
+func TestAnEmptyPasteReachesForAnImage(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+	m.focus = focusTerminal
+
+	_, cmd := m.Update(tea.PasteMsg{Content: ""})
+	if cmd == nil {
+		t.Fatal("an empty paste did nothing; it should reach for the clipboard")
+	}
+
+	// A paste with text in it is the terminal's own business and goes straight
+	// through, without asking the clipboard anything.
+	if _, cmd := m.Update(tea.PasteMsg{Content: "some text"}); cmd != nil {
+		t.Error("a paste carrying text went looking for an image as well")
+	}
+}
+
+// The list has nothing to paste into, so neither kind of paste means anything
+// there.
+func TestPastingIntoTheListDoesNothing(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+	m.focus = focusSidebar
+
+	if _, cmd := m.Update(tea.PasteMsg{Content: ""}); cmd != nil {
+		t.Error("an empty paste reached for an image while the list had the keyboard")
+	}
+}

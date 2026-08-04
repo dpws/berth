@@ -1,3 +1,5 @@
 /berth
+/berth-clipd
+/berth-clipd.exe
 *.log
 /dist/

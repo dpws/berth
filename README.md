@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/dpws/berth/main/install.sh | sh
 ```
 
 **Windows** — berth needs a pty and tmux, so it does not run there. What does
-is `berth-clipd`, the clipboard agent that lets `ctrl+y` on the remote machine
+is `berth-clipd`, the clipboard agent that lets `ctrl+v` on the remote machine
 paste a screenshot from this one:
 
 ```powershell
@@ -86,10 +86,11 @@ The list and the terminal take turns owning the keyboard — the rules above and
 below the body are lit along whichever half has it. `ctrl+o` switches between
 them; while the terminal has focus **every other key goes to the session**,
 including `ctrl+c`, `esc` and tmux's own `ctrl+b` prefix. The
-exceptions are `ctrl+y` (paste an image) and `ctrl+x` (quit), which berth keeps
+exceptions are `ctrl+v` (paste an image) and `ctrl+x` (quit), which berth keeps
 for itself so they work without going back to the list first — both are
-configurable, and `ctrl+x` in particular is worth remapping if you run emacs in
-a session, since emacs wants that key for itself.
+configurable. `ctrl+v` is worth remapping to `ctrl+y` if you use vim in a
+session, since visual block is that key there, and so is a shell's
+quoted-insert; `ctrl+x` is worth remapping if you run emacs, which wants it.
 
 | Key | In the session list |
 | --- | --- |
@@ -105,7 +106,7 @@ a session, since emacs wants that key for itself.
 | `p` | start a session from a preset |
 | `P` | save the selected session as a preset |
 | `,` | settings — edit the config without leaving berth |
-| `ctrl+y` | paste an image into the focused session |
+| `ctrl+v` | paste an image into the focused session |
 | drag | select text in the session, copied on release |
 | `m` | hand the mouse to your terminal entirely, and take it back |
 | `R` | refresh now |
@@ -165,7 +166,7 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "mouse": true,
   "session_options": ["mouse on"],
   "image_drop_dir": "/home/you/berth-drop",
-  "paste_image_key": "ctrl+y",
+  "paste_image_key": "ctrl+v",
   "quit_key": "ctrl+x",
   "clip_agent_url": "http://127.0.0.1:8377",
   "clip_agent_token": "",
@@ -588,7 +589,18 @@ only the tail of each transcript is parsed after the first pass. Set
 
 ## Pasting images
 
-`ctrl+y` puts an image in front of the agent in the focused session. Terminals
+**ctrl+v** pastes an image into the focused session. berth takes that key from
+the session to do it, so a shell loses quoted-insert and vim loses visual
+block; `"paste_image_key": "ctrl+y"` gives it back.
+
+berth also watches for a paste that arrives empty. That is what a terminal
+sends when its own paste key was pressed over a clipboard holding no text — an
+image, usually — and it is the one case the terminal cannot serve and berth
+can. It matters most on Windows Terminal, which keeps `ctrl+v` for itself and
+never passes the key on, so the empty paste is the only sign berth gets that
+you asked for one.
+
+`ctrl+v` puts an image in front of the agent in the focused session. Terminals
 cannot carry image bytes, so what actually happens is that berth finds the
 image on disk and types its **path** into the prompt — which is exactly what
 Claude Code and Codex want, since they read the file themselves.
@@ -601,7 +613,7 @@ It looks in three places, in order:
    says so rather than failing silently.
 2. **A remote clipboard**, served by `berth-clipd` on the machine you are
    actually sitting at — see below. This is the one that gives you a real
-   `ctrl+y` from a Windows or macOS workstation.
+   `ctrl+v` from a Windows or macOS workstation.
 3. **A drop folder** (`~/berth-drop` by default), taking the most recently
    modified image. Always available, needs no setup:
 
@@ -609,7 +621,7 @@ It looks in three places, in order:
    scp shot.png pi:berth-drop/     # from your laptop
    ```
 
-   then `ctrl+y` in the session. The folder is created on first use.
+   then `ctrl+v` in the session. The folder is created on first use.
 
 Clipboard images are written to `~/.cache/berth/images`, pruned to the 20
 most recent. Paths containing spaces are copied to a clean name first so the
@@ -621,7 +633,7 @@ for itself while a session has focus — the other is `ctrl+o`.
 
 ### berth-clipd: the clipboard of the machine you are sitting at
 
-If `ctrl+y` reports **"the tunnel is open but berth-clipd is not running on the
+If `ctrl+v` reports **"the tunnel is open but berth-clipd is not running on the
 machine at the other end"**, the forward is fine and the far end is not
 answering. Check the agent is running there, and that it is on the same port
 and the same loopback family your `-R` points at — writing the forward as
@@ -641,7 +653,7 @@ loopback, and you forward the port when you connect.
 ```
 your workstation                      the box running berth
 ┌────────────────────┐               ┌──────────────────────────┐
-│ clipboard          │               │ ctrl+y                   │
+│ clipboard          │               │ ctrl+v                   │
 │   ↓                │               │   ↓                      │
 │ berth-clipd        │◀── ssh -R ────│ GET 127.0.0.1:8377/image │
 │ 127.0.0.1:8377     │─── PNG ──────▶│   ↓ path into the prompt │
@@ -742,7 +754,7 @@ environment from whenever its server first started, so after reconnecting:
 tmux set-environment -g DISPLAY "$DISPLAY"
 ```
 
-berth's `ctrl+y` does not need this — it reads the clipboard in its own
+berth's `ctrl+v` does not need this — it reads the clipboard in its own
 process, which always has the current environment.
 
 Other settings worth having, none of them berth-specific:

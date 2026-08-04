@@ -71,7 +71,7 @@ func TestMissingConfigIsNotAnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.QuitKey != "ctrl+x" || cfg.PasteImageKey != "ctrl+y" {
+	if cfg.QuitKey != "ctrl+x" || cfg.PasteImageKey != "ctrl+v" {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
 }

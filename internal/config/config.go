@@ -51,6 +51,11 @@ type Config struct {
 	// SSH this is the only workable source, so it is on by default.
 	ImageDropDir string `json:"image_drop_dir"`
 	// PasteImageKey inserts the path of an image into the focused session.
+	//
+	// ctrl+v by default, which is the key everyone reaches for. berth takes it
+	// from the session to do so: a shell loses quoted-insert and vim loses
+	// visual block, both of which are ctrl+v there. Set it to ctrl+y, or to
+	// anything else, to give the key back.
 	PasteImageKey string `json:"paste_image_key"`
 	// QuitKey quits berth from anywhere, including while a session has the
 	// keyboard - the only other way out from there is ctrl+o then q. Set it to
@@ -125,7 +130,7 @@ func Default() Config {
 		HideStatusBar:      true,
 		Mouse:              true,
 		ImageDropDir:       filepath.Join(home, "berth-drop"),
-		PasteImageKey:      "ctrl+y",
+		PasteImageKey:      "ctrl+v",
 		QuitKey:            "ctrl+x",
 		ClipAgentURL:       "http://127.0.0.1:8377",
 		SessionOptions:     []string{"mouse on"},

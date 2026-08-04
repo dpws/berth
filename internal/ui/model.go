@@ -692,9 +692,18 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		// A paste is its own message now rather than a flag on a key, and it
 		// only means anything to the session: berth's own fields take typing a
 		// character at a time, and the list has nothing to paste into.
-		if m.mode == modeNormal && m.focus == focusTerminal && m.pane != nil {
-			m.pane.Paste(msg.Content)
+		if m.mode != modeNormal || m.focus != focusTerminal || m.pane == nil {
+			return nil
 		}
+		if msg.Content == "" {
+			// A paste that arrived with nothing in it is what a terminal sends
+			// when its own paste key was pressed over a clipboard holding no
+			// text - an image, most often, which is exactly what berth can
+			// fetch and the terminal cannot. Windows Terminal keeps ctrl+v for
+			// itself, so this is the only way that key reaches berth there.
+			return m.pasteImage()
+		}
+		m.pane.Paste(msg.Content)
 		return nil
 	}
 

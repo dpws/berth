@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/config"
@@ -149,6 +149,13 @@ func settingsList() []setting {
 			"hidden", "shown",
 			func(c config.Config) bool { return c.HideTask },
 			func(c *config.Config, v bool) { c.HideTask = v }),
+		text("doctor_skipped", "Checks skipped", "Startup checks you told berth to stop asking about; clear it to hear them again",
+			func(c config.Config) string { return strings.Join(c.DoctorSkipped, ", ") },
+			func(c *config.Config, v string) { c.DoctorSkipped = splitList(v) }),
+		flag("hide_doctor", "Startup check", "Looking over tmux, the terminal and the agents when berth starts",
+			"off", "on",
+			func(c config.Config) bool { return c.HideDoctor },
+			func(c *config.Config, v bool) { c.HideDoctor = v }),
 		flag("check_updates", "Update check", "Asks GitHub once a day for the newest release; installs nothing",
 			"on", "off",
 			func(c config.Config) bool { return c.CheckUpdates },
@@ -301,7 +308,7 @@ func (m *Model) settingRow(i int, selected bool) string {
 }
 
 // handleSettingsKey drives the settings screen.
-func (m *Model) handleSettingsKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.settingsEditing {
 		return m.handleSettingEdit(msg)
 	}
@@ -353,7 +360,7 @@ func (m *Model) handleSettingsKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleSettingEdit drives the one-line editor.
-func (m *Model) handleSettingEdit(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleSettingEdit(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.settingsEditing = false
@@ -478,20 +485,26 @@ func (m *Model) applyConfig() tea.Cmd {
 		cmds = append(cmds, listSessions())
 	}
 
-	// The mouse is held by the terminal, not by the config, so turning it off
-	// here has to tell the terminal too.
-	if m.cfg.Mouse != m.mouseOn {
-		m.mouseOn = m.cfg.Mouse
-		if m.mouseOn {
-			cmds = append(cmds, tea.EnableMouseCellMotion)
-		} else {
-			cmds = append(cmds, tea.DisableMouse)
-		}
-	}
+	// The mouse is asked for by the view, so changing it here is only a matter
+	// of recording what the next one should ask for.
+	m.mouseOn = m.cfg.Mouse
 
 	if m.pane != nil {
 		w, h := m.terminalSize()
 		m.pane.Resize(w, h)
 	}
 	return tea.Batch(cmds...)
+}
+
+// splitList reads a comma-separated setting back into a list, dropping the
+// empties so that clearing the field means an empty list rather than a list
+// with one blank in it.
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

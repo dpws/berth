@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/git"
@@ -175,7 +175,7 @@ func TestMovingTheCursorAsksAboutTheNewDirectory(t *testing.T) {
 	if m.gitDir != "/w/alpha" {
 		t.Fatalf("the first selection was not asked about, gitDir = %q", m.gitDir)
 	}
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown}); cmd == nil {
+	if _, cmd := m.Update(key(tea.KeyDown)); cmd == nil {
 		t.Fatal("moving the cursor produced no command at all")
 	}
 	if m.gitDir != "/w/beta" {
@@ -387,7 +387,7 @@ func TestTheListsOwnRulesMeetTheDivider(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha"))
 
-	rows := strings.Split(m.View(), "\n")
+	rows := strings.Split(m.screen(), "\n")
 	sideW := m.sidebarWidth()
 
 	var joined int

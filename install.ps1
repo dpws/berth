@@ -38,6 +38,12 @@
 .PARAMETER NoStartup
     Install without running it at login.
 
+.PARAMETER NoTerminalFix
+    Skip the offer to teach Windows Terminal that shift+enter means a new line.
+
+.PARAMETER Yes
+    Answer yes to that offer without asking, for an unattended install.
+
 .PARAMETER Uninstall
     Remove the agent and its startup entry.
 #>
@@ -51,6 +57,8 @@ param(
     [int]$Port          = 8377,
     [string]$Token      = "",
     [switch]$NoStartup,
+    [switch]$NoTerminalFix,
+    [switch]$Yes,
     [switch]$Uninstall
 )
 
@@ -106,12 +114,177 @@ function Copy-Agent {
     }
 }
 
+# ------------------------------------------------- windows terminal
+
+# Windows Terminal cannot tell shift+enter from enter on its own: it does not
+# speak the keyboard protocol that would carry the difference, so an agent on
+# the other end of the SSH connection receives a plain return and sends the
+# half-written prompt. Nothing on the remote machine can recover a distinction
+# that was never transmitted.
+#
+# What it can do is be told to send something else for that key. An escape
+# followed by a return is what Claude Code and Codex both read as a line break,
+# and it is what berth sends for the keys it can already see.
+#
+# alt+enter is not an answer here, whatever it is elsewhere: Windows Terminal
+# keeps that one for going fullscreen.
+# Built by interpolation rather than by adding a [char] to a string: in
+# PowerShell the left operand decides the arithmetic, and [char] + string tries
+# to make a char of the string rather than concatenating.
+$wtNewlineInput = "$([char]27)`r"
+$wtNewlineKeys  = "shift+enter"
+
+function Get-TerminalSettings {
+    # Store, Preview and unpackaged installs each keep it somewhere different,
+    # and someone can have more than one.
+    $candidates = @(
+        "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
+        "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
+        "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
+    )
+    $candidates | Where-Object { Test-Path $_ }
+}
+
+# Remove-JsonComments takes the // and /* */ out of a settings file so it can be
+# parsed. Windows Terminal writes comments into the file it ships, and neither
+# PowerShell 5.1 nor 7 will parse JSON containing them.
+#
+# It steps through the text a character at a time rather than using a regular
+# expression, because a // inside a string - "https://..." is in every profile
+# that has an icon or a source - is not a comment, and a regular expression that
+# knew the difference would be harder to be sure of than this loop.
+function Remove-JsonComments {
+    param([string]$Text)
+
+    $out      = New-Object System.Text.StringBuilder
+    $inString = $false
+    $escaped  = $false
+    $i        = 0
+
+    while ($i -lt $Text.Length) {
+        $c = $Text[$i]
+
+        if ($inString) {
+            [void]$out.Append($c)
+            if ($escaped)       { $escaped = $false }
+            elseif ($c -eq '\') { $escaped = $true }
+            elseif ($c -eq '"') { $inString = $false }
+            $i++
+            continue
+        }
+
+        if ($c -eq '"') { $inString = $true; [void]$out.Append($c); $i++; continue }
+
+        if ($c -eq '/' -and $i + 1 -lt $Text.Length) {
+            if ($Text[$i + 1] -eq '/') {
+                while ($i -lt $Text.Length -and $Text[$i] -ne "`n") { $i++ }
+                continue
+            }
+            if ($Text[$i + 1] -eq '*') {
+                $i += 2
+                while ($i + 1 -lt $Text.Length -and -not ($Text[$i] -eq '*' -and $Text[$i + 1] -eq '/')) { $i++ }
+                $i += 2
+                continue
+            }
+        }
+
+        [void]$out.Append($c)
+        $i++
+    }
+    $out.ToString()
+}
+
+function Set-TerminalNewline {
+    param([string]$Path)
+
+    $raw = Get-Content $Path -Raw
+    try {
+        $settings = Remove-JsonComments $raw | ConvertFrom-Json
+    } catch {
+        Write-Warn "could not read $Path as JSON, leaving it alone"
+        return $false
+    }
+
+    # Newer Windows Terminal calls the list "actions"; older ones "keybindings".
+    # Whichever this file already uses is the one to add to, so the file is not
+    # left saying the same thing in two places.
+    $listName = if ($null -ne $settings.actions) { "actions" }
+                elseif ($null -ne $settings.keybindings) { "keybindings" }
+                else { "actions" }
+
+    $existing = @()
+    if ($null -ne $settings.$listName) { $existing = @($settings.$listName) }
+
+    foreach ($entry in $existing) {
+        if ($entry.keys -eq $wtNewlineKeys) {
+            # Something is already bound to it. Replacing someone's own binding
+            # is not this script's call, so say so and leave it.
+            Write-Warn "$wtNewlineKeys is already bound in $Path, leaving it alone"
+            return $false
+        }
+    }
+
+    $binding = [pscustomobject]@{
+        command = [pscustomobject]@{ action = "sendInput"; input = $wtNewlineInput }
+        keys    = $wtNewlineKeys
+    }
+
+    Copy-Item $Path "$Path.berth-bak" -Force
+    $settings | Add-Member -NotePropertyName $listName -NotePropertyValue (@($existing) + $binding) -Force
+
+    # Depth has to be generous: profiles, schemes and their nested objects go
+    # several levels down, and ConvertTo-Json silently truncates past its
+    # default of 2, which would throw away most of the file.
+    $settings | ConvertTo-Json -Depth 100 | Set-Content $Path -Encoding UTF8
+    Write-Ok "added $wtNewlineKeys to $Path"
+    return $true
+}
+
+
+# Remove-TerminalNewline takes out only the binding this script added: same key,
+# same input. A binding someone wrote themselves for that key, or changed the
+# input of, is theirs and is left where it is.
+function Remove-TerminalNewline {
+    param([string]$Path)
+
+    $raw = Get-Content $Path -Raw
+    try {
+        $settings = Remove-JsonComments $raw | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+
+    $listName = if ($null -ne $settings.actions) { "actions" }
+                elseif ($null -ne $settings.keybindings) { "keybindings" }
+                else { return $false }
+
+    $kept = @(@($settings.$listName) | Where-Object {
+        -not ($_.keys -eq $wtNewlineKeys -and $_.command.action -eq "sendInput" -and $_.command.input -eq $wtNewlineInput)
+    })
+    if ($kept.Count -eq @($settings.$listName).Count) { return $false }
+
+    Copy-Item $Path "$Path.berth-bak" -Force
+    $settings | Add-Member -NotePropertyName $listName -NotePropertyValue $kept -Force
+    $settings | ConvertTo-Json -Depth 100 | Set-Content $Path -Encoding UTF8
+    Write-Ok "removed $wtNewlineKeys from $Path"
+    return $true
+}
+
 if ($Uninstall) {
     Write-Step "Removing berth-clipd"
     Stop-Agent
     if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force; Write-Ok "removed the startup entry" }
     if (Test-Path $InstallDir)   { Remove-Item $InstallDir -Recurse -Force; Write-Ok "removed $InstallDir" }
-    Write-Host "`nDone. Nothing else was touched." -ForegroundColor Green
+
+    # The key binding is the one thing this script leaves outside its own
+    # directory, so uninstalling has to take it back out rather than claim
+    # nothing else was touched.
+    $removed = 0
+    foreach ($f in @(Get-TerminalSettings)) {
+        if (Remove-TerminalNewline $f) { $removed++ }
+    }
+    if ($removed -eq 0) { Write-Host "`nDone. Nothing else was touched." -ForegroundColor Green }
+    else { Write-Host "`nDone. Restart Windows Terminal for the key to go back to what it was." -ForegroundColor Green }
     return
 }
 
@@ -247,6 +420,39 @@ as clip_agent_token in berth's config.
     }
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
+
+if (-not $NoTerminalFix) {
+    $found = @(Get-TerminalSettings)
+    if ($found.Count -gt 0) {
+        Write-Step "Windows Terminal"
+        Write-Host "    berth can teach Windows Terminal that shift+enter means a new line"
+        Write-Host "    rather than sending your half-written prompt. Without it, use ctrl+j."
+        Write-Host "    Files that would change, each copied to <file>.berth-bak first:"
+        foreach ($f in $found) { Write-Host "      $f" }
+        Write-Warn "comments and formatting in those files are not preserved"
+
+        # An unattended install has nobody to ask. Read-Host would sit there
+        # waiting for a console that is not listening, so a run with no
+        # interactive host takes the answer it would take from silence: no.
+        $answer = "y"
+        if (-not $Yes) {
+            if ([Environment]::UserInteractive) {
+                $answer = Read-Host "    Do it? [y/N]"
+            } else {
+                $answer = "n"
+                Write-Warn "not running interactively, so leaving it; pass -Yes to do it anyway"
+            }
+        }
+        if ($answer -match '^(y|yes)$') {
+            foreach ($f in $found) { [void](Set-TerminalNewline $f) }
+            Write-Ok "restart Windows Terminal for it to take effect"
+        } else {
+            Write-Ok "left alone; ctrl+j gives you a new line without changing anything"
+        }
+    }
 }
 
 Write-Host @"

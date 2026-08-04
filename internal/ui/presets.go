@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/tmux"
@@ -60,7 +60,7 @@ func (m *Model) openSavePreset() tea.Cmd {
 }
 
 // handlePresetsKey drives the list of saved presets.
-func (m *Model) handlePresetsKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handlePresetsKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "q", "p":
 		return m.closePresets()
@@ -166,7 +166,7 @@ func (m *Model) deletePreset() tea.Cmd {
 }
 
 // handleSavePresetKey drives the little dialog that names a new preset.
-func (m *Model) handleSavePresetKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleSavePresetKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal

@@ -3,9 +3,13 @@ package ui
 import (
 	"fmt"
 	"math"
+	"os"
 	"strconv"
+	"strings"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // Palette. Kept small on purpose: the session list is chrome around someone
@@ -120,4 +124,63 @@ func kindColor(kind string) lipgloss.TerminalColor {
 	default:
 		return colShell
 	}
+}
+
+// SettleStyles tells lipgloss what it would otherwise go and ask the terminal,
+// and must be called before anything is rendered.
+//
+// The palette is adaptive, and lipgloss resolves an adaptive colour by asking
+// the terminal whether its background is dark - an OSC 11 query, answered on
+// the same input Bubble Tea has already taken into raw mode. Bubble Tea reads
+// the reply first, so the query is never answered and lipgloss waits out its
+// five second timeout, once, on the first frame drawn. That is five seconds of
+// nothing on screen before berth appears.
+//
+// Both answers are available without asking anyone. The colour profile follows
+// from TERM and COLORTERM the way every other tool reads them, and the
+// background follows from COLORFGBG when the terminal sets it, falling back to
+// dark - which is what a terminal running a coding agent overwhelmingly is, and
+// what berth's palette is legible against either way.
+func SettleStyles() {
+	lipgloss.SetColorProfile(colorProfile())
+	lipgloss.SetHasDarkBackground(darkBackground(os.Getenv("COLORFGBG")))
+}
+
+// colorProfile works out how many colours the terminal can take, without
+// asking it. This is the same reading Bubble Tea makes for its own renderer -
+// the environment, terminfo, and what tmux says it can pass through - so the
+// two halves of the output cannot disagree about what they may emit. Reading
+// only the environment would lose truecolor inside tmux, which sets TERM to
+// tmux-256color whatever the terminal underneath it can do.
+func colorProfile() termenv.Profile {
+	switch colorprofile.Detect(os.Stdout, os.Environ()) {
+	case colorprofile.TrueColor:
+		return termenv.TrueColor
+	case colorprofile.ANSI256:
+		return termenv.ANSI256
+	case colorprofile.ANSI:
+		return termenv.ANSI
+	default:
+		return termenv.Ascii
+	}
+}
+
+// darkBackground reads COLORFGBG, which terminals that set it write as
+// "foreground;background" in ANSI colour numbers. Anything from 0 to 6, or 8,
+// is a dark background; 7 and 9 through 15 are light. A value that is missing
+// or unreadable is taken as dark.
+func darkBackground(fgbg string) bool {
+	_, bg, ok := strings.Cut(fgbg, ";")
+	if !ok {
+		return true
+	}
+	// Some terminals write three fields, "fg;cursor;bg".
+	if _, third, ok := strings.Cut(bg, ";"); ok {
+		bg = third
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(bg))
+	if err != nil {
+		return true
+	}
+	return n < 7 || n == 8
 }

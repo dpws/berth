@@ -7,18 +7,18 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const (
 	tea_KeyTab   = tea.KeyTab
 	tea_KeyEnter = tea.KeyEnter
-	tea_KeyEsc   = tea.KeyEsc
+	tea_KeyEsc   = tea.KeyEscape
 	tea_KeyRight = tea.KeyRight
 )
 
-func keyRune(r rune) tea.KeyMsg        { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
-func keyType(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+func keyRune(r rune) tea.KeyPressMsg    { return typed(string(r)) }
+func keyType(code rune) tea.KeyPressMsg { return key(code) }
 
 func tree(t *testing.T, names ...string) string {
 	t.Helper()

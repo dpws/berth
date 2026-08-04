@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/clip"
 	"github.com/dpws/berth/internal/config"
+	"github.com/dpws/berth/internal/doctor"
 	"github.com/dpws/berth/internal/git"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
@@ -43,6 +44,7 @@ const (
 	modePresets
 	modeSavePreset
 	modeColor
+	modeDoctor
 )
 
 // attachDelay debounces attaching while the user scrolls the list.
@@ -141,6 +143,11 @@ type Model struct {
 	// its branch at once instead of blanking until the next read lands.
 	// gitDir is the directory last asked about, and gitGen names the poll chain,
 	// the same way usageGen does.
+	// doctor is what the startup check found and has not been dealt with, and
+	// doctorCursor is the one being read about.
+	doctor       []doctor.Finding
+	doctorCursor int
+
 	// gitTicking says a poll chain is alive, so that saving some unrelated
 	// setting does not start a second one beside it.
 	gitStatus  map[string]gitEntry
@@ -159,7 +166,7 @@ type Model struct {
 	// pressed holds a press that has not been forwarded yet, because until the
 	// button comes up berth does not know whether it was a click for the
 	// session or the start of a selection.
-	pressed *tea.MouseMsg
+	pressed tea.MouseMsg
 	// clipboard is a copy waiting to be handed to the terminal on the next
 	// frame, as an OSC 52 sequence.
 	clipboard string
@@ -210,7 +217,7 @@ func New(cfg config.Config) *Model {
 	value := textinput.New()
 	value.CharLimit = 512
 	value.Prompt = ""
-	value.Width = settingsWidth - 24
+	value.SetWidth(settingsWidth - 24)
 
 	m := &Model{
 		cfg:          cfg,
@@ -321,6 +328,9 @@ func (m *Model) Init() tea.Cmd {
 	if m.cfg.CheckUpdates {
 		cmds = append(cmds, checkForUpdate(Version))
 	}
+	if !m.cfg.HideDoctor {
+		cmds = append(cmds, runDoctor())
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -426,19 +436,16 @@ func (m *Model) readAgents(sessions []tmux.Session) {
 	m.agents = m.agentWatcher.Refresh(sessions)
 }
 
-// titleCmd sets the terminal's window title, or returns nil when it already
-// says the right thing. Terminals redraw their title bar on every OSC write,
-// so repeating one is visible flicker on some of them.
-func (m *Model) titleCmd() tea.Cmd {
+// syncTitle keeps the title the view will ask for in step with what is
+// selected. The title is a property of the view now rather than something
+// written by a command, so Bubble Tea writes it only when it changes and the
+// flicker that repeating an OSC caused on some terminals cannot come back.
+func (m *Model) syncTitle() {
 	if m.cfg.HideWindowTitle {
-		return nil
+		m.title = ""
+		return
 	}
-	want := m.windowTitle()
-	if want == m.title {
-		return nil
-	}
-	m.title = want
-	return tea.SetWindowTitle(want)
+	m.title = m.windowTitle()
 }
 
 // windowTitle names the selected session, so berth is identifiable among a row
@@ -500,7 +507,9 @@ func waitForPane(p *term.Pane) tea.Cmd {
 // Update runs the message through the model, then keeps the terminal's title
 // in step with whatever the result left selected.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m, tea.Batch(m.update(msg), m.titleCmd(), m.statusCmd(), m.spinnerCmd(), m.gitCmd())
+	cmd := tea.Batch(m.update(msg), m.statusCmd(), m.spinnerCmd(), m.gitCmd())
+	m.syncTitle()
+	return m, cmd
 }
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
@@ -561,6 +570,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return next
 		}
 		return tea.Batch(next, readGit(m.gitDir))
+
+	case doctorMsg:
+		m.showDoctor(msg)
+		return nil
 
 	case gitMsg:
 		if m.gitStatus == nil {
@@ -672,14 +685,23 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.handleMouse(msg)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.PasteMsg:
+		// A paste is its own message now rather than a flag on a key, and it
+		// only means anything to the session: berth's own fields take typing a
+		// character at a time, and the list has nothing to paste into.
+		if m.mode == modeNormal && m.focus == focusTerminal && m.pane != nil {
+			m.pane.Paste(msg.Content)
+		}
+		return nil
 	}
 
 	return nil
 }
 
-func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch m.mode {
 	case modeNew:
 		return m.handleNewKey(msg)
@@ -700,11 +722,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleSavePresetKey(msg)
 	case modeColor:
 		return m.handleColorKey(msg)
+	case modeDoctor:
+		return m.handleDoctorKey(msg)
 	}
 
 	// Ctrl+O toggles which half of the screen owns the keyboard. Everything
 	// else, when the terminal has focus, belongs to the session.
-	if msg.Type == tea.KeyCtrlO {
+	if msg.String() == "ctrl+o" {
 		m.toggleFocus()
 		return nil
 	}
@@ -727,17 +751,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.clearSelection()
-		switch {
-		case msg.Paste:
-			m.pane.Paste(string(msg.Runes))
-		case msg.Type == tea.KeyRunes && !msg.Alt:
-			// Bubble Tea hands us printable input in runs; forwarding the whole
-			// run as text keeps every character instead of just the first.
-			m.pane.SendText(string(msg.Runes))
-		default:
-			if key, ok := term.ToKeyPress(msg); ok {
-				m.pane.SendKey(key)
-			}
+		if text, ok := typedText(msg.Key()); ok {
+			m.pane.SendText(text)
+			return nil
+		}
+		if key, ok := term.ToKeyPress(msg); ok {
+			m.pane.SendKey(key)
 		}
 		return nil
 	}
@@ -748,27 +767,48 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 // handleMouse routes a click or wheel event to whichever half of the screen it
 // landed on. Sidebar events drive the list; terminal events are translated
 // into the pane's coordinate space and handed to the session.
+// typedText reports the characters a key produced, when it produced any.
+//
+// Text is set only for a key that made characters, so it is what separates
+// typing from a key that has to be encoded; forwarding the whole of it keeps a
+// multi-byte character or a dead-key sequence whole rather than sending its
+// first rune.
+//
+// Shift is not a modifier here, it is part of how the character was made:
+// shift+a arrives as "A" with the shift still noted beside it, and insisting on
+// an unmodified key drops every capital letter and every symbol typed with
+// shift. Alt and ctrl are different - they change what a key means rather than
+// which character it is - so those are left to be encoded.
+func typedText(k tea.Key) (string, bool) {
+	if k.Text == "" || k.Mod&^tea.ModShift != 0 {
+		return "", false
+	}
+	return k.Text, true
+}
+
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if m.mode != modeNormal {
 		return nil
 	}
 
+	at := msg.Mouse()
+
 	// Everything below the git bar sits one row lower than the screen says, so
 	// the offset comes off before any of this decides what was clicked.
 	top := m.topBarHeight()
-	if msg.Y < top {
+	if at.Y < top {
 		return nil // the bar itself
 	}
 
 	sideW := m.sidebarWidth()
-	if msg.X < sideW {
-		return m.handleSidebarMouse(msg, msg.Y-top)
+	if at.X < sideW {
+		return m.handleSidebarMouse(msg, at.Y-top)
 	}
-	if msg.X < sideW+1+gutter || m.pane == nil {
+	if at.X < sideW+1+gutter || m.pane == nil {
 		return nil // the divider and the blank column beside it
 	}
 
-	x, y := msg.X-sideW-1-gutter, msg.Y-top
+	x, y := at.X-sideW-1-gutter, at.Y-top
 	if y >= m.bodyHeight() {
 		return nil // the footer
 	}
@@ -790,17 +830,21 @@ func (m *Model) handleTerminalMouse(msg tea.MouseMsg, x, y int) tea.Cmd {
 		}
 	}
 
-	switch {
-	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-		held := msg
-		m.pressed = &held
+	// The kind of event is its own type now rather than a field, so what used
+	// to be a chain of conditions is a switch on the message itself.
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		if msg.Mouse().Button != tea.MouseLeft {
+			break
+		}
+		m.pressed = msg
 		m.dragging = false
 		m.sel = &term.Selection{AnchorX: x, AnchorY: y, CursorX: x, CursorY: y}
 		return nil
 
-	case msg.Action == tea.MouseActionMotion && m.pressed != nil:
-		if m.sel == nil {
-			return nil
+	case tea.MouseMotionMsg:
+		if m.pressed == nil || m.sel == nil {
+			break
 		}
 		m.sel.CursorX, m.sel.CursorY = x, y
 		if !m.sel.Empty() {
@@ -808,8 +852,11 @@ func (m *Model) handleTerminalMouse(msg tea.MouseMsg, x, y int) tea.Cmd {
 		}
 		return nil
 
-	case msg.Action == tea.MouseActionRelease && m.pressed != nil:
-		press := *m.pressed
+	case tea.MouseReleaseMsg:
+		if m.pressed == nil {
+			break
+		}
+		press := m.pressed
 		m.pressed = nil
 		if !m.dragging {
 			// It was a click after all: give the session the press it never
@@ -822,7 +869,8 @@ func (m *Model) handleTerminalMouse(msg tea.MouseMsg, x, y int) tea.Cmd {
 			// The press was held in screen coordinates, so it crosses the same
 			// divider, gutter and git bar the release already did. Missing the
 			// gutter put the press one column right of the release beside it.
-			forward(press, press.X-m.sidebarWidth()-1-gutter, press.Y-m.topBarHeight())
+			held := press.Mouse()
+			forward(press, held.X-m.sidebarWidth()-1-gutter, held.Y-m.topBarHeight())
 			forward(msg, x, y)
 			return nil
 		}
@@ -877,14 +925,14 @@ func plural(n int, one, many string) string {
 // row is msg.Y already brought into the sidebar's own coordinates, which start
 // below the git bar rather than at the top of the screen.
 func (m *Model) handleSidebarMouse(msg tea.MouseMsg, row int) tea.Cmd {
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
+	switch msg.Mouse().Button {
+	case tea.MouseWheelUp:
 		return m.moveCursor(-1)
-	case tea.MouseButtonWheelDown:
+	case tea.MouseWheelDown:
 		return m.moveCursor(1)
 	}
 
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+	if _, ok := msg.(tea.MouseClickMsg); !ok || msg.Mouse().Button != tea.MouseLeft {
 		return nil
 	}
 	if row < 0 || row >= len(m.rowSessions) {
@@ -903,7 +951,7 @@ func (m *Model) handleSidebarMouse(msg tea.MouseMsg, row int) tea.Cmd {
 	return m.moveCursor(target - m.cursor)
 }
 
-func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleSidebarKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
@@ -1003,7 +1051,7 @@ func (m *Model) handleSidebarKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleNewKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleNewKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal
@@ -1141,7 +1189,7 @@ func (m *Model) completeDirField() bool {
 	return true
 }
 
-func (m *Model) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleRenameKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal
@@ -1169,7 +1217,7 @@ func (m *Model) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-func (m *Model) handleFilterKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleFilterKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.filter = ""
@@ -1188,7 +1236,7 @@ func (m *Model) handleFilterKey(msg tea.KeyMsg) tea.Cmd {
 	return tea.Batch(cmd, m.clampCursor())
 }
 
-func (m *Model) handleConfirmKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		m.mode = modeNormal
@@ -1502,10 +1550,11 @@ func (m *Model) toggleMouse() tea.Cmd {
 	m.mouseOn = !m.mouseOn
 	if m.mouseOn {
 		m.setStatus("mouse on - berth takes clicks and the wheel", false)
-		return tea.EnableMouseCellMotion
+	} else {
+		m.setStatus("mouse off - your terminal selects, berth stops clicking", false)
 	}
-	m.setStatus("mouse off - your terminal selects, berth stops clicking", false)
-	return tea.DisableMouse
+	// Nothing to send: the next view asks for the mode it wants.
+	return nil
 }
 
 func (m *Model) toggleFocus() {
@@ -1647,7 +1696,27 @@ func (m *Model) terminalSize() (int, int) {
 
 // ---------------------------------------------------------------- view
 
-func (m *Model) View() string {
+// View wraps the rendered screen in the properties berth wants from the
+// terminal. In v2 the alt screen, focus reporting, the mouse and the window
+// title are all asked for by the view rather than set once at startup, which
+// is why turning the mouse off is now just a different view rather than a
+// command that has to be remembered and undone.
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.screen())
+	v.AltScreen = true
+	// Focus reporting only matters once tmux has focus-events on, but asking
+	// for it costs nothing when it does not.
+	v.ReportFocus = true
+	v.WindowTitle = m.title
+	if m.mouseOn {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
+}
+
+// screen renders the frame itself: everything inside the window, as one string
+// of exactly as many rows as the window is tall.
+func (m *Model) screen() string {
 	if !m.ready {
 		return "starting berth…"
 	}
@@ -1662,7 +1731,7 @@ func (m *Model) View() string {
 		return m.presetsView()
 	case modeColor:
 		return m.colorsView()
-	case modeNew, modeRename, modeConfirmKill, modeHelp, modeSavePreset:
+	case modeNew, modeRename, modeConfirmKill, modeHelp, modeSavePreset, modeDoctor:
 		return m.dialogView()
 	}
 
@@ -1897,6 +1966,11 @@ func (m *Model) dialogView() string {
 		body = m.savePresetDialog()
 	case modeHelp:
 		body = m.helpText()
+	case modeDoctor:
+		// The doctor draws its own panel: it is the one dialog that has to fit
+		// rather than be cut, since the line it would lose names the keys that
+		// dismiss it.
+		return m.placeDialog(m.doctorPanel())
 	}
 	return m.placeDialog(dialogStyle.Render(body))
 }

@@ -14,7 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/ui"
@@ -65,6 +65,11 @@ func run() error {
 		return statusLine(flag.Args()[1:])
 	case "update":
 		return selfUpdate()
+	case "doctor":
+		// Deliberately before the tmux check below: a missing tmux is the first
+		// thing the doctor is there to tell you about, so refusing to run
+		// without one would withhold the answer.
+		return runDoctor(flag.Args()[1:])
 	}
 
 	if err := tmux.Available(); err != nil {
@@ -89,17 +94,17 @@ func run() error {
 	}
 
 	ui.Version = version
+	// Settle what the styles need to know before anything is drawn. Left to
+	// itself lipgloss asks the terminal for its background colour and waits five
+	// seconds for a reply that never comes - Bubble Tea has the input in raw
+	// mode by then and reads the answer first - so berth is told the answer
+	// instead, and asks nobody.
+	ui.SettleStyles()
 	model := ui.New(cfg)
-	opts := []tea.ProgramOption{
-		tea.WithAltScreen(),
-		// Focus reporting only matters once tmux has focus-events on, but
-		// asking for it costs nothing when it does not.
-		tea.WithReportFocus(),
-	}
-	if cfg.Mouse {
-		opts = append(opts, tea.WithMouseCellMotion())
-	}
-	prog := tea.NewProgram(model, opts...)
+	// The alt screen, focus reporting and the mouse are all asked for by the
+	// view now rather than at startup, so that turning the mouse off from the
+	// settings screen is the same kind of change as any other.
+	prog := tea.NewProgram(model)
 	_, runErr := prog.Run()
 	model.Close()
 	return runErr
@@ -223,6 +228,10 @@ usage:
   berth                 open the session list
   berth ls              print the sessions and exit
   berth update          replace this binary with the newest release
+  berth doctor          check tmux, your terminal and the agents for settings
+                        berth needs, and say what each one costs you. Add
+                        "--fix" to apply the ones berth can, or "--keys" to
+                        see what your terminal really sends for a key.
   berth help            print this
   berth statusline      hook for Claude Code's statusLine setting: reads its
                         payload on stdin, records the rate limits for berth,

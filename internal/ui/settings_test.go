@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/config"
@@ -17,7 +17,7 @@ func openSettings(t *testing.T) *Model {
 	t.Helper()
 	m := newTestModel()
 	m.Update(sessions("alpha"))
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
+	m.Update(typed(","))
 	if m.mode != modeSettings {
 		t.Fatal("',' did not open the settings screen")
 	}
@@ -39,7 +39,7 @@ func cursorTo(t *testing.T, m *Model, key string) setting {
 
 func typeInto(m *Model, s string) {
 	for _, r := range s {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(typed(string(r)))
 	}
 }
 
@@ -77,7 +77,7 @@ func TestTogglingASettingAppliesImmediately(t *testing.T) {
 	if m.cfg.HideUsage {
 		t.Fatal("expected rate limits to start shown")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 
 	if !m.cfg.HideUsage {
 		t.Error("enter did not toggle the setting")
@@ -90,7 +90,7 @@ func TestTogglingASettingAppliesImmediately(t *testing.T) {
 		t.Error("the usage tracker outlived the setting that wanted it")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 	if m.usageTracker == nil {
 		t.Error("turning it back on did not rebuild the tracker")
 	}
@@ -101,12 +101,12 @@ func TestEditingAValueAppliesImmediately(t *testing.T) {
 	cursorTo(t, m, "sidebar_width")
 	before := m.sidebarWidth()
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 	if !m.settingsEditing {
 		t.Fatal("enter did not open the editor")
 	}
 	m.settingInput.SetValue("36")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 
 	if m.settingsEditing {
 		t.Error("the editor stayed open after a good value")
@@ -127,9 +127,9 @@ func TestABadValueIsRefusedInTheEditor(t *testing.T) {
 	before := m.cfg.RefreshMillis
 
 	for _, bad := range []string{"soon", "0", "-5"} {
-		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m.Update(key(tea.KeyEnter))
 		m.settingInput.SetValue(bad)
-		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m.Update(key(tea.KeyEnter))
 
 		if !m.settingsEditing {
 			t.Errorf("%q closed the editor", bad)
@@ -141,7 +141,7 @@ func TestABadValueIsRefusedInTheEditor(t *testing.T) {
 		if m.status == "" {
 			t.Errorf("%q was refused without saying why", bad)
 		}
-		m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m.Update(key(tea.KeyEscape))
 	}
 }
 
@@ -150,9 +150,9 @@ func TestEscapeLeavesTheEditorWithoutChanging(t *testing.T) {
 	cursorTo(t, m, "claude_command")
 	before := m.cfg.ClaudeCommand
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 	typeInto(m, "-x")
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(key(tea.KeyEscape))
 
 	if m.settingsEditing {
 		t.Error("esc did not leave the editor")
@@ -169,11 +169,11 @@ func TestSaveWritesTheConfig(t *testing.T) {
 
 	m := openSettings(t)
 	cursorTo(t, m, "sidebar_width")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 	m.settingInput.SetValue("33")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m.Update(key('s', tea.ModCtrl))
 	if m.settingsDirty {
 		t.Error("still marked unsaved after saving")
 	}
@@ -192,8 +192,8 @@ func TestSaveWritesTheConfig(t *testing.T) {
 func TestClosingWithUnsavedChangesWarns(t *testing.T) {
 	m := openSettings(t)
 	cursorTo(t, m, "hide_task")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(key(tea.KeyEnter))
+	m.Update(key(tea.KeyEscape))
 
 	if m.mode != modeNormal {
 		t.Fatal("esc did not close the settings screen")
@@ -208,7 +208,7 @@ func TestResetToDefault(t *testing.T) {
 
 	cursorTo(t, m, "sidebar_width")
 	m.cfg.SidebarWidth = 99
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m.Update(typed("d"))
 	if m.cfg.SidebarWidth != config.Default().SidebarWidth {
 		t.Errorf("SidebarWidth = %d, want the default", m.cfg.SidebarWidth)
 	}
@@ -216,11 +216,11 @@ func TestResetToDefault(t *testing.T) {
 	// Booleans reset too, and resetting one already at its default is a no-op.
 	cursorTo(t, m, "hide_task")
 	m.cfg.HideTask = true
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m.Update(typed("d"))
 	if m.cfg.HideTask {
 		t.Error("HideTask did not go back to its default")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m.Update(typed("d"))
 	if m.cfg.HideTask {
 		t.Error("resetting an already-default setting flipped it")
 	}
@@ -230,9 +230,9 @@ func TestSessionOptionsRoundTrip(t *testing.T) {
 	m := openSettings(t)
 	cursorTo(t, m, "session_options")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 	m.settingInput.SetValue("mouse on,  status off ,")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 
 	want := []string{"mouse on", "status off"}
 	if len(m.cfg.SessionOptions) != len(want) {
@@ -266,7 +266,7 @@ func TestTokenIsMasked(t *testing.T) {
 
 	// Editing it shows the real value, or it could not be corrected.
 	m.settingsCursor = i
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(key(tea.KeyEnter))
 	if m.settingInput.Value() != "hunter2-and-then-some" {
 		t.Errorf("editor opened with %q", m.settingInput.Value())
 	}
@@ -278,11 +278,11 @@ func TestSettingsFitsAnySize(t *testing.T) {
 		m := newTestModel()
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m.Update(sessions("alpha"))
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}})
+		m.Update(typed(","))
 
 		for _, cursor := range []int{0, len(m.settings) / 2, len(m.settings) - 1} {
 			m.settingsCursor = cursor
-			view := m.View() // must not panic or index out of range
+			view := m.screen() // must not panic or index out of range
 			if view == "" {
 				t.Errorf("%dx%d cursor %d rendered nothing", size[0], size[1], cursor)
 			}

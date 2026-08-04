@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/dpws/berth/internal/tmux"
 )
@@ -265,15 +265,22 @@ func TestModifiedKeysReachTheSession(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		key  tea.KeyType
+		key  tea.KeyPressMsg
 		want string
 	}{
-		{"plain up", tea.KeyUp, "^[[A"},
-		{"shift+up", tea.KeyShiftUp, "^[[1;2A"},
-		{"ctrl+left", tea.KeyCtrlLeft, "^[[1;5D"},
-		{"ctrl+shift+home", tea.KeyCtrlShiftHome, "^[[1;6H"},
+		{"plain up", tea.KeyPressMsg{Code: tea.KeyUp}, "^[[A"},
+		{"shift+up", tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}, "^[[1;2A"},
+		{"ctrl+left", tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModCtrl}, "^[[1;5D"},
+		{"ctrl+shift+home", tea.KeyPressMsg{
+			Code: tea.KeyHome, Mod: tea.ModCtrl | tea.ModShift,
+		}, "^[[1;6H"},
+
+		// The whole point of the upgrade: a terminal that can tell shift+enter
+		// from enter now gets a newline out of it rather than a submitted
+		// prompt. cat -v shows the escape as ^[ and the return ends the line.
+		{"shift+enter", tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}, "^["},
 	} {
-		key, ok := ToKeyPress(tea.KeyMsg{Type: tc.key})
+		key, ok := ToKeyPress(tc.key)
 		if !ok {
 			t.Fatalf("ToKeyPress rejected %s", tc.name)
 		}

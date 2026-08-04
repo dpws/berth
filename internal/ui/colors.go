@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dpws/berth/internal/tmux"
 )
@@ -113,7 +113,7 @@ func (m *Model) openColors() tea.Cmd {
 }
 
 // handleColorKey drives the palette.
-func (m *Model) handleColorKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleColorKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "q", "c":
 		m.mode = modeNormal

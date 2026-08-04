@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/config"
@@ -59,7 +59,7 @@ func TestCreatedSessionBecomesSelected(t *testing.T) {
 func TestSelectionSurvivesRefresh(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha", "bravo", "charlie"))
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m.Update(typed("j"))
 	if got := selectedName(t, m); got != "bravo" {
 		t.Fatalf("j should move to bravo, got %q", got)
 	}
@@ -75,7 +75,7 @@ func TestSelectionSurvivesRefresh(t *testing.T) {
 func TestFilterNarrowsAndClamps(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha", "bravo", "charlie"))
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m.Update(typed("G"))
 	if got := selectedName(t, m); got != "charlie" {
 		t.Fatalf("G should jump to the last session, got %q", got)
 	}
@@ -130,12 +130,7 @@ func TestMouseSelectsSidebarRow(t *testing.T) {
 		t.Fatal("charlie was not rendered on any row")
 	}
 
-	m.Update(tea.MouseMsg{
-		X:      2,
-		Y:      row + m.topBarHeight(), // rowSessions is indexed from below the bar
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-	})
+	m.Update(click(2, row+m.topBarHeight())) // rowSessions is indexed from below the bar
 	if got := selectedName(t, m); got != "charlie" {
 		t.Fatalf("clicking charlie's row selected %q", got)
 	}
@@ -146,13 +141,13 @@ func TestMouseWheelScrollsTheList(t *testing.T) {
 	m.Update(sessions("alpha", "bravo", "charlie"))
 
 	wheel := func(button tea.MouseButton) {
-		m.Update(tea.MouseMsg{X: 2, Y: 3, Action: tea.MouseActionPress, Button: button})
+		m.Update(wheelAt(2, 3, button))
 	}
-	wheel(tea.MouseButtonWheelDown)
+	wheel(tea.MouseWheelDown)
 	if got := selectedName(t, m); got != "bravo" {
 		t.Fatalf("wheel down selected %q, want bravo", got)
 	}
-	wheel(tea.MouseButtonWheelUp)
+	wheel(tea.MouseWheelUp)
 	if got := selectedName(t, m); got != "alpha" {
 		t.Fatalf("wheel up selected %q, want alpha", got)
 	}
@@ -166,12 +161,7 @@ func TestMouseIgnoresTheDividerColumn(t *testing.T) {
 	m.View()
 
 	before := selectedName(t, m)
-	m.Update(tea.MouseMsg{
-		X:      m.sidebarWidth(),
-		Y:      3,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-	})
+	m.Update(click(m.sidebarWidth(), 3))
 	if got := selectedName(t, m); got != before {
 		t.Fatalf("a click on the divider changed the selection to %q", got)
 	}
@@ -273,7 +263,7 @@ func TestQuitKeyWorksFromEitherHalf(t *testing.T) {
 		m.Update(sessions("alpha"))
 		m.focus = focus
 
-		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+		_, cmd := m.Update(key('x', tea.ModCtrl))
 		if !m.quitting {
 			t.Errorf("focus %v: ctrl+x did not quit", focus)
 		}
@@ -289,7 +279,7 @@ func TestQuitKeyCanBeDisabled(t *testing.T) {
 	m.Update(sessions("alpha"))
 	m.focus = focusTerminal
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	m.Update(key('x', tea.ModCtrl))
 	if m.quitting {
 		t.Error("ctrl+x quit even though quit_key is empty")
 	}
@@ -300,12 +290,12 @@ func TestQuitKeyCanBeDisabled(t *testing.T) {
 func TestQuitKeyDoesNotFireInsideADialog(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha"))
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m.Update(typed("n"))
 	if m.mode != modeNew {
 		t.Fatalf("n should open the new-session form, mode = %v", m.mode)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	m.Update(key('x', tea.ModCtrl))
 	if m.quitting {
 		t.Error("ctrl+x quit from inside the new-session form")
 	}
@@ -325,33 +315,35 @@ func TestWindowTitleFollowsTheSelection(t *testing.T) {
 		t.Errorf("title = %q, want %q", got, "api (claude) — berth")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m.Update(typed("j"))
 	if got := m.windowTitle(); got != "web (codex) — berth" {
 		t.Errorf("after moving, title = %q, want %q", got, "web (codex) — berth")
 	}
 }
 
-// The title is rewritten on every message, so it has to stay quiet when
-// nothing about the selection changed.
-func TestTitleIsOnlySetWhenItChanges(t *testing.T) {
+// The title is a property of the view now, so what matters is that it always
+// says what is selected. Writing it only when it changes is Bubble Tea's job,
+// which is the whole reason it stopped being a command.
+func TestTitleFollowsTheSelection(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha", "bravo"))
 	if m.title == "" {
 		t.Fatal("title was never set")
 	}
 
-	if cmd := m.titleCmd(); cmd != nil {
-		t.Error("titleCmd fired again for an unchanged title")
-	}
-	// A refresh that changes nothing must not touch the title either.
+	// A refresh that changes nothing leaves it alone.
+	before := m.title
 	m.Update(sessions("alpha", "bravo"))
-	if cmd := m.titleCmd(); cmd != nil {
-		t.Error("titleCmd fired after a no-op refresh")
+	if m.title != before {
+		t.Errorf("a no-op refresh moved the title from %q to %q", before, m.title)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m.Update(typed("j"))
 	if m.title != "bravo (shell) — berth" {
 		t.Errorf("title = %q, want it to follow the cursor", m.title)
+	}
+	if got := m.View().WindowTitle; got != m.title {
+		t.Errorf("the view asks for %q, want %q", got, m.title)
 	}
 }
 
@@ -361,11 +353,11 @@ func TestWindowTitleCanBeDisabled(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.Update(sessions("alpha"))
 
-	if cmd := m.titleCmd(); cmd != nil {
-		t.Error("hide_window_title still set the terminal title")
-	}
 	if m.title != "" {
 		t.Errorf("title recorded as %q, want it left alone", m.title)
+	}
+	if got := m.View().WindowTitle; got != "" {
+		t.Errorf("hide_window_title still had the view ask for %q", got)
 	}
 }
 
@@ -410,7 +402,7 @@ func TestMouseCanBeToggledAtRuntime(t *testing.T) {
 	}
 
 	m.Update(sessions("alpha"))
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m.Update(typed("m"))
 	if m.mouseOn {
 		t.Error("m did not release the mouse")
 	}
@@ -420,12 +412,12 @@ func TestMouseCanBeToggledAtRuntime(t *testing.T) {
 
 	// While released, stray events are ignored rather than acted on.
 	before := m.cursor
-	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	m.Update(wheelAt(2, 3, tea.MouseWheelDown))
 	if m.cursor != before {
 		t.Error("a mouse event moved the cursor after the mouse was released")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m.Update(typed("m"))
 	if !m.mouseOn {
 		t.Error("m did not take the mouse back")
 	}
@@ -466,16 +458,26 @@ func withPane(t *testing.T, m *Model) {
 	m.pane = pane
 }
 
-// terminalPress builds a mouse event over the terminal half of the screen.
-// x and y are the pane's own coordinates; the git bar sits above the body, so
-// the screen row is that much further down.
-func terminalMouse(m *Model, x, y int, action tea.MouseAction, button tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{
-		X:      m.sidebarWidth() + 1 + gutter + x,
-		Y:      y + m.topBarHeight(),
-		Action: action,
-		Button: button,
-	}
+// termAt converts the pane's own coordinates into the screen coordinates a
+// mouse event would carry: past the sidebar, the divider and the gutter, and
+// below the bar above the body.
+func termAt(m *Model, x, y int) (int, int) {
+	return m.sidebarWidth() + 1 + gutter + x, y + m.topBarHeight()
+}
+
+func terminalClick(m *Model, x, y int) tea.MouseClickMsg {
+	sx, sy := termAt(m, x, y)
+	return click(sx, sy)
+}
+
+func terminalRelease(m *Model, x, y int) tea.MouseReleaseMsg {
+	sx, sy := termAt(m, x, y)
+	return release(sx, sy)
+}
+
+func terminalMotion(m *Model, x, y int) tea.MouseMotionMsg {
+	sx, sy := termAt(m, x, y)
+	return motion(sx, sy)
 }
 
 // A drag over the session selects text; berth has the mouse, and the terminal
@@ -485,11 +487,11 @@ func TestDragOverTheSessionSelects(t *testing.T) {
 	m.Update(sessions("alpha"))
 	withPane(t, m)
 
-	m.Update(terminalMouse(m, 2, 1, tea.MouseActionPress, tea.MouseButtonLeft))
+	m.Update(terminalClick(m, 2, 1))
 	if m.selection() != nil {
 		t.Error("a press alone should not select anything yet")
 	}
-	m.Update(terminalMouse(m, 9, 3, tea.MouseActionMotion, tea.MouseButtonLeft))
+	m.Update(terminalMotion(m, 9, 3))
 
 	sel := m.selection()
 	if sel == nil {
@@ -506,8 +508,8 @@ func TestClickOverTheSessionIsNotASelection(t *testing.T) {
 	m.Update(sessions("alpha"))
 	withPane(t, m)
 
-	m.Update(terminalMouse(m, 4, 2, tea.MouseActionPress, tea.MouseButtonLeft))
-	m.Update(terminalMouse(m, 4, 2, tea.MouseActionRelease, tea.MouseButtonLeft))
+	m.Update(terminalClick(m, 4, 2))
+	m.Update(terminalRelease(m, 4, 2))
 
 	if m.selection() != nil {
 		t.Error("a click left a selection behind")
@@ -524,13 +526,13 @@ func TestSelectionClearsOnInput(t *testing.T) {
 	withPane(t, m)
 	m.focus = focusTerminal
 
-	m.Update(terminalMouse(m, 1, 1, tea.MouseActionPress, tea.MouseButtonLeft))
-	m.Update(terminalMouse(m, 8, 1, tea.MouseActionMotion, tea.MouseButtonLeft))
+	m.Update(terminalClick(m, 1, 1))
+	m.Update(terminalMotion(m, 8, 1))
 	if m.selection() == nil {
 		t.Fatal("no selection to clear")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m.Update(typed("x"))
 	if m.selection() != nil {
 		t.Error("typing into the session left the highlight behind")
 	}
@@ -541,7 +543,7 @@ func TestWheelIsNotASelection(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessions("alpha"))
 	withPane(t, m)
-	m.Update(terminalMouse(m, 3, 3, tea.MouseActionPress, tea.MouseButtonWheelDown))
+	m.Update(func() tea.MouseMsg { x, y := termAt(m, 3, 3); return wheelAt(x, y, tea.MouseWheelDown) }())
 	if m.selection() != nil {
 		t.Error("the wheel started a selection")
 	}
@@ -689,7 +691,7 @@ func TestFrameRowsAreExactlyTheScreenWidth(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 72, Height: 14})
 	m.Update(sessions("alpha", "bravo"))
 
-	rows := strings.Split(m.View(), "\n")
+	rows := strings.Split(m.screen(), "\n")
 	if len(rows) != 14 {
 		t.Fatalf("frame is %d rows, want 14", len(rows))
 	}
@@ -759,10 +761,7 @@ func TestGutterSeparatesTheDividerFromTheSession(t *testing.T) {
 
 	// A click landing in the gutter belongs to neither half.
 	before := selectedName(t, m)
-	m.Update(tea.MouseMsg{
-		X: sideW + 1, Y: 3,
-		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-	})
+	m.Update(click(sideW+1, 3))
 	if got := selectedName(t, m); got != before {
 		t.Errorf("a click in the gutter changed the selection to %q", got)
 	}
@@ -839,7 +838,7 @@ func TestMovingASessionUpAndDown(t *testing.T) {
 	m.Update(ordered("alpha", "bravo", "charlie"))
 
 	m.cursor = 2 // charlie
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	m.Update(typed("K"))
 	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "charlie", "bravo"}) {
 		t.Errorf("after K: %q", got)
 	}
@@ -848,7 +847,7 @@ func TestMovingASessionUpAndDown(t *testing.T) {
 		t.Errorf("cursor left on %q, want it following charlie", got)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	m.Update(typed("J"))
 	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo", "charlie"}) {
 		t.Errorf("after J: %q", got)
 	}
@@ -859,12 +858,12 @@ func TestMovingStopsAtTheEnds(t *testing.T) {
 	m.Update(ordered("alpha", "bravo"))
 
 	m.cursor = 0
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	m.Update(typed("K"))
 	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo"}) {
 		t.Errorf("moving the first session up changed the order: %q", got)
 	}
 	m.cursor = 1
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	m.Update(typed("J"))
 	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo"}) {
 		t.Errorf("moving the last session down changed the order: %q", got)
 	}
@@ -878,7 +877,7 @@ func TestMovingPastAFilteredOutSession(t *testing.T) {
 	m.filter = "api"
 
 	m.cursor = 0 // api-one, with api-two next on screen
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	m.Update(typed("J"))
 
 	if got := sessionOrder(m); !slices.Equal(got, []string{"api-two", "hidden", "api-one"}) {
 		t.Errorf("order = %q, want the two visible sessions swapped", got)
@@ -950,7 +949,7 @@ func TestDialogsAreCutToTheWindowNotOffTheTop(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	m.mode = modeHelp
 
-	view := m.View()
+	view := m.screen()
 	lines := strings.Split(view, "\n")
 	if len(lines) > m.height {
 		t.Fatalf("help is %d lines in a %d-row window", len(lines), m.height)
@@ -964,7 +963,88 @@ func TestDialogsAreCutToTheWindowNotOffTheTop(t *testing.T) {
 
 	// With room to spare nothing is cut.
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	if strings.Contains(ansi.Strip(m.View()), "window too short") {
+	if strings.Contains(ansi.Strip(m.screen()), "window too short") {
 		t.Error("a dialog that fits was marked as cut")
+	}
+}
+
+// key builds a key press the way a terminal that can disambiguate reports one:
+// a key code, plus whatever was held down with it. It stands in for the struct
+// literals these tests used before, which named a key by a constant per
+// combination rather than by the key and its modifiers.
+func key(code rune, mods ...tea.KeyMod) tea.KeyPressMsg {
+	var mod tea.KeyMod
+	for _, m := range mods {
+		mod |= m
+	}
+	return tea.KeyPressMsg{Code: code, Mod: mod}
+}
+
+// typed builds the key press for a printable character, which carries the text
+// it produced as well as the key that produced it.
+func typed(s string) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
+}
+
+// click, release, motion and wheel build the four kinds of mouse message. In
+// v2 the kind of event is the message's own type rather than an Action field,
+// which is why these are four constructors and not one with an argument.
+func click(x, y int) tea.MouseClickMsg {
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func release(x, y int) tea.MouseReleaseMsg {
+	return tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func motion(x, y int) tea.MouseMotionMsg {
+	return tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func wheelAt(x, y int, button tea.MouseButton) tea.MouseWheelMsg {
+	return tea.MouseWheelMsg{X: x, Y: y, Button: button}
+}
+
+// shift is part of how a character was made, not a modifier that changes what
+// the key means. Insisting on an unmodified key here dropped every capital
+// letter and every symbol typed with shift, which made berth unusable for
+// typing into a session.
+func TestShiftedCharactersAreTypedThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.Key
+		want string
+	}{
+		{"a", tea.Key{Code: 'a', Text: "a"}, "a"},
+		{"shift+a", tea.Key{Code: 'a', Mod: tea.ModShift, Text: "A"}, "A"},
+		{"shift+9 on a US layout", tea.Key{Code: '9', Mod: tea.ModShift, Text: "("}, "("},
+		{"an accented letter", tea.Key{Code: 'é', Text: "é"}, "é"},
+		{"a character outside the BMP", tea.Key{Code: '𝄞', Text: "𝄞"}, "𝄞"},
+	} {
+		got, ok := typedText(tc.key)
+		if !ok {
+			t.Errorf("%s was not typed through at all", tc.name)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s arrived as %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// ctrl and alt change what a key means rather than which character it is,
+	// so they are left to be encoded as key presses instead.
+	for _, tc := range []struct {
+		name string
+		key  tea.Key
+	}{
+		{"ctrl+a", tea.Key{Code: 'a', Mod: tea.ModCtrl}},
+		{"alt+a", tea.Key{Code: 'a', Mod: tea.ModAlt, Text: "a"}},
+		{"ctrl+shift+a", tea.Key{Code: 'a', Mod: tea.ModCtrl | tea.ModShift, Text: "A"}},
+		{"enter", tea.Key{Code: tea.KeyEnter}},
+		{"shift+enter", tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift}},
+	} {
+		if _, ok := typedText(tc.key); ok {
+			t.Errorf("%s was treated as plain typing", tc.name)
+		}
 	}
 }

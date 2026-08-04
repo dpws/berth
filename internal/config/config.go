@@ -91,6 +91,13 @@ type Config struct {
 	// GitRefreshSeconds is how often that bar is re-read. Reading it walks the
 	// worktree, so like the rate limits it runs far slower than the tmux poll.
 	GitRefreshSeconds int `json:"git_refresh_seconds"`
+	// HideDoctor stops berth checking the software it sits on when it starts,
+	// and offering to put right whatever is not set the way it needs.
+	HideDoctor bool `json:"hide_doctor"`
+	// DoctorSkipped names the checks to stop asking about. Skipping one is a
+	// decision about your own setup, so it is remembered rather than asked
+	// again every start.
+	DoctorSkipped []string `json:"doctor_skipped"`
 }
 
 // Default returns the configuration used when no config file exists.

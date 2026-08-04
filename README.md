@@ -44,6 +44,14 @@ paste a screenshot from this one:
 irm https://raw.githubusercontent.com/dpws/berth/main/install.ps1 | iex
 ```
 
+On Windows the installer also offers to teach Windows Terminal that
+**shift+enter** means a new line rather than "send this now" - it cannot tell
+the two apart on its own, and alt+enter is taken there for fullscreen. It asks
+first, lists the files it would change, copies each to `<file>.berth-bak`, and
+says that comments and formatting in them are not preserved. `-NoTerminalFix`
+skips the offer, `-Yes` takes it without asking, and `-Uninstall` removes the
+binding again. Decline it and **ctrl+j** does the same job, changing nothing.
+
 The shell installer takes `VERSION`, `BERTH_INSTALL_DIR`, `BERTH_CLIPD=1` to
 add the agent locally, and `BERTH_DRY_RUN=1` to see what it would do. It
 verifies the release checksum, never uses sudo, and writes only to the target
@@ -397,6 +405,91 @@ never takes the index lock out from under an agent running its own git in the
 same directory. `"git_refresh_seconds"` changes the interval and
 `"hide_git_bar": true` silences the half over the session — the half over the
 list stays either way, so hiding it gives no room back.
+
+## berth doctor
+
+berth is a thin thing on top of tmux, a terminal and an agent, and it only works
+as well as they are set up. The failures are quiet ones - shift+enter submits a
+half-written prompt, colour is rounded to 256, a session never learns it lost
+the keyboard - and none of them look like a berth bug.
+
+```sh
+berth doctor          # say what is set and what each setting costs
+berth doctor --fix    # apply the ones berth can
+```
+
+It checks tmux (whether modified keys are passed on, focus is reported, the
+mouse is taken, colour is capped, how long escape waits), the terminal (whether
+it can tell shift+enter from enter, and whether it accepts a copy over OSC 52),
+and the agents (whether Claude Code is pointed at berth's status line).
+
+Without `--fix` it changes nothing and prints the command for each finding, so
+the work can be done by hand. With it, berth applies what it can: tmux options
+go to the running server *and* to `~/.tmux.conf`, so they take effect now and
+survive a restart. **Any file berth edits is copied to `<file>.berth-bak`
+first**, once - not before each change, so the copy is the file as it was before
+berth had ever touched it. Its own additions go under a `# added by berth
+doctor` line, and a setting already there is left alone rather than repeated.
+
+berth also runs the checks when it starts and offers to put things right:
+
+```
+  berth doctor  4 to look at
+
+  ▸ tmux is dropping modified keys (extended-keys off)  tmux · broken
+    tmux is not reporting focus  tmux · could be better
+    tmux is leaving the mouse alone  tmux · could be better
+    kitty may be refusing copies  terminal · could be better
+
+  f fix what berth can · s never ask again · esc not now
+```
+
+`esc` is not now and changes nothing; `s` records those checks in
+`doctor_skipped` so they are not raised again. `"hide_doctor": true` turns the
+startup check off entirely, and clearing `doctor_skipped` brings back anything
+you told it to forget. The prompt never appears over something else you have
+open.
+
+## Multi-line prompts, and telling tmux to say more
+
+Agents take more than one line of instruction, and **shift+enter** is how you
+give them one without sending what you have written. berth also accepts
+**alt+enter** and **ctrl+j**, which mean the same thing: all three reach the
+session as an escape and a return, which is what Claude Code and Codex read as
+a line break rather than a prompt.
+
+**shift+enter needs the terminal to be able to say it.** Terminals send the
+same byte for enter and shift+enter unless they speak the keyboard protocol
+kitty defined. kitty, ghostty, WezTerm, foot and recent iTerm2 can; Windows
+Terminal and most others cannot, and nothing downstream can recover a
+distinction that was never sent. `berth doctor --keys` says which yours is:
+press shift+enter and enter, and see whether they read differently.
+
+**If berth runs inside tmux**, tmux also has to pass the difference on:
+
+```sh
+tmux set -s extended-keys on          # this session only
+echo 'set -s extended-keys on' >> ~/.tmux.conf   # and every one after
+```
+
+That only applies when tmux is between your terminal and berth. Run berth
+directly - the usual way, over SSH - and tmux is downstream of your keyboard,
+so the setting has nothing to do with it.
+
+**Windows Terminal takes alt+enter for fullscreen**, so there ctrl+j is the one
+to use, or let `install.ps1` bind shift+enter for you - it offers, and says what
+it would change before it does.
+
+**While you are in there**, tmux also caps colour at 256 unless told the
+terminal underneath it can do better:
+
+```sh
+tmux set -as terminal-features ',*:RGB'
+```
+
+berth reads what tmux advertises and draws within it, so without this its
+colours are quietly rounded to the nearest of 256 rather than being wrong -
+but the meters and the branch read better with the full range.
 
 ## Rate limits
 

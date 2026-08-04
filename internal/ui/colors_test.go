@@ -3,8 +3,9 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/agent"
@@ -85,16 +86,16 @@ func TestPaletteOpensOnTheCurrentColour(t *testing.T) {
 
 	// It wraps rather than stopping at the ends.
 	m.colorCursor = 0
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(key(tea.KeyUp))
 	if m.colorCursor != len(sessionColors)-1 {
 		t.Errorf("cursor = %d, want it wrapped to the end", m.colorCursor)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(key(tea.KeyDown))
 	if m.colorCursor != 0 {
 		t.Errorf("cursor = %d, want it wrapped back", m.colorCursor)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(key(tea.KeyEscape))
 	if m.mode != modeNormal {
 		t.Error("esc did not close the palette")
 	}
@@ -144,5 +145,55 @@ func TestHeaderVersionMarkers(t *testing.T) {
 	m.newerVersion = ""
 	if got := ansi.Strip(m.brandBar(28)); !strings.Contains(got, "v0.3.0+") {
 		t.Errorf("header = %q, want the ahead-of-tag marker", got)
+	}
+}
+
+// Reading the background out of the environment is what keeps lipgloss from
+// asking the terminal and waiting five seconds for an answer Bubble Tea has
+// already read. The numbers are ANSI colours: 0-6 and 8 are dark, 7 and 9-15
+// are light.
+func TestDarkBackgroundFromTheEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		fgbg string
+		want bool
+		why  string
+	}{
+		{"15;0", true, "white on black"},
+		{"0;15", false, "black on white"},
+		{"7;0", true, "grey on black"},
+		{"0;7", false, "black on grey"},
+		{"15;8", true, "8 is the bright black, still dark"},
+		{"15;9", false, "9 upwards is a bright colour, treated as light"},
+
+		// Some terminals write three fields, foreground;cursor;background.
+		{"15;default;0", true, "three fields, dark"},
+		{"0;default;15", false, "three fields, light"},
+
+		// Anything berth cannot read is taken as dark, which is what a terminal
+		// running a coding agent overwhelmingly is.
+		{"", true, "unset"},
+		{"15", true, "no background field"},
+		{"15;", true, "empty background field"},
+		{"15;grey", true, "not a number"},
+	} {
+		if got := darkBackground(tc.fgbg); got != tc.want {
+			t.Errorf("darkBackground(%q) = %v, want %v (%s)", tc.fgbg, got, tc.want, tc.why)
+		}
+	}
+}
+
+// The whole point of settling them up front is that it happens before a frame
+// is drawn, so it must not depend on a terminal being there to answer.
+func TestSettleStylesNeedsNoTerminal(t *testing.T) {
+	t.Setenv("COLORFGBG", "15;0")
+	done := make(chan struct{})
+	go func() { SettleStyles(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SettleStyles blocked; it is meant to ask nobody anything")
+	}
+	if !lipgloss.HasDarkBackground() {
+		t.Error("a dark COLORFGBG did not reach lipgloss")
 	}
 }

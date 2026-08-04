@@ -1049,9 +1049,12 @@ func (m *Model) handleSidebarKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "m":
 		return m.toggleMouse()
 
-	case "K":
+	// Shift with the arrows says the same thing as shift with the letters, and
+	// is the pair most people reach for first. Both are kept: the arrows are
+	// the guessable one, J/K the one that stays under the home row.
+	case "K", "shift+up":
 		return m.moveSession(-1)
-	case "J":
+	case "J", "shift+down":
 		return m.moveSession(1)
 
 	case "R":
@@ -1911,6 +1914,7 @@ func (m *Model) footerView() string {
 		// One cell each side keeps the hints off the edge of the screen.
 		help = joinHelpWidth(max(0, m.width-2),
 			"↑/↓", "move",
+			"shift+↑/↓", "reorder",
 			"enter", "terminal",
 			"n", "new",
 			"x", "kill",
@@ -2140,7 +2144,8 @@ func (m *Model) helpText() string {
 		{"x", "kill the selected session"},
 		{"r", "rename the selected session"},
 		{"c", "give the session a colour"},
-		{"J / K", "move the session down or up the list"},
+		{"shift+↑/↓", "move the session up or down the list"},
+		{"J / K", "the same, without reaching for the arrows"},
 		{"/", "filter by name"},
 		{"p", "start from a preset"},
 		{"P", "save this session as a preset"},

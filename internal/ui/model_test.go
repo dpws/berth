@@ -853,6 +853,27 @@ func TestMovingASessionUpAndDown(t *testing.T) {
 	}
 }
 
+// shift with the arrows is the other way to say J and K, and has to reach the
+// list rather than being taken for a plain arrow and only moving the cursor.
+func TestMovingASessionWithShiftedArrows(t *testing.T) {
+	m := newTestModel()
+	m.Update(ordered("alpha", "bravo", "charlie"))
+
+	m.cursor = 2 // charlie
+	m.Update(key(tea.KeyUp, tea.ModShift))
+	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "charlie", "bravo"}) {
+		t.Errorf("after shift+up: %q", got)
+	}
+	if got := selectedName(t, m); got != "charlie" {
+		t.Errorf("cursor left on %q, want it following charlie", got)
+	}
+
+	m.Update(key(tea.KeyDown, tea.ModShift))
+	if got := sessionOrder(m); !slices.Equal(got, []string{"alpha", "bravo", "charlie"}) {
+		t.Errorf("after shift+down: %q", got)
+	}
+}
+
 func TestMovingStopsAtTheEnds(t *testing.T) {
 	m := newTestModel()
 	m.Update(ordered("alpha", "bravo"))

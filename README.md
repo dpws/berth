@@ -101,7 +101,8 @@ quoted-insert; `ctrl+x` is worth remapping if you run emacs, which wants it.
 | `x` | kill the selected session (asks first) |
 | `r` | rename the selected session |
 | `c` | give the session a colour |
-| `J` / `K` | move the session down or up the list |
+| `shift+↑`/`shift+↓` | move the session up or down the list |
+| `K` / `J` | the same, without reaching for the arrows |
 | `/` | filter by name |
 | `p` | start a session from a preset |
 | `P` | save the selected session as a preset |
@@ -226,7 +227,8 @@ busy completing.
 ### Ordering
 
 tmux has no idea of session order — it lists them alphabetically and offers no
-way to move one. `J` and `K` move the selected session down and up, and berth
+way to move one. **`shift+↑` and `shift+↓` move the selected session up and
+down**, and `K` and `J` do the same without leaving the home row. berth
 remembers where you put it on the tmux session itself, so the arrangement
 survives berth restarting.
 

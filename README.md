@@ -325,7 +325,7 @@ moving.
 says what your agents are up to without you having to look:
 
 ```
-?2 ⠋1 ○3 api (claude) — berth
+? 2 ⠋ 1 ○ 3 api (claude) — berth
 ```
 
 The glyphs are the list's own — `?` blocked on you, dots working, `○` idle —
@@ -334,9 +334,11 @@ nothing is in is left out rather than shown as a zero, and with nothing to
 count the title is just the session. Waiting leads, since a tab bar truncates
 from the end and that is the number you would mind losing.
 
-The dots stand still up there. A title is rewritten with an escape sequence
-rather than redrawn, so animating it would mean writing the whole title ten
-times a second for a glyph nobody is looking straight at. Set
+The dots turn up there as they turn in the list, which is most of what a tab is
+for: a tab that is moving says the machine is still working, from further away
+than you can read a number at. It costs a title written every frame while an
+agent is working — an escape sequence rather than a redraw — and stops dead the
+moment the last one goes quiet, so an idle berth writes nothing at all. Set
 `"hide_window_title": true` to keep the tab out of it entirely, or
 `"hide_agent_status": true` to stop berth watching the agents at all, which
 takes the tally with it.

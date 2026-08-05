@@ -661,13 +661,13 @@ func TestWindowTitleTalliesWhatTheAgentsAreDoing(t *testing.T) {
 	}
 
 	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy}})
-	if got := m.windowTitle(); got != "⠋1 api (claude) — berth" {
+	if got := m.windowTitle(); got != "⠋ 1 api (claude) — berth" {
 		t.Errorf("title = %q, want the working count", got)
 	}
 
 	// The waiting session is not the selected one, and still marks the tab.
 	withAgents(m, map[string]agent.Info{"web": {Status: agent.Waiting}})
-	if got := m.windowTitle(); got != "?1 api (claude) — berth" {
+	if got := m.windowTitle(); got != "? 1 api (claude) — berth" {
 		t.Errorf("title = %q, want the waiting count", got)
 	}
 
@@ -678,7 +678,7 @@ func TestWindowTitleTalliesWhatTheAgentsAreDoing(t *testing.T) {
 		"web":  {Status: agent.Waiting},
 		"docs": {Status: agent.Busy},
 	})
-	if got := m.windowTitle(); got != "?1 ⠋1 ○1 api (claude) — berth" {
+	if got := m.windowTitle(); got != "? 1 ⠋ 1 ○ 1 api (claude) — berth" {
 		t.Errorf("title = %q, want all three tallied with waiting first", got)
 	}
 
@@ -686,8 +686,38 @@ func TestWindowTitleTalliesWhatTheAgentsAreDoing(t *testing.T) {
 		"web":  {Status: agent.Waiting},
 		"docs": {Status: agent.Waiting},
 	})
-	if got := m.windowTitle(); got != "?2 api (claude) — berth" {
+	if got := m.windowTitle(); got != "? 2 api (claude) — berth" {
 		t.Errorf("title = %q, want a count", got)
+	}
+}
+
+// The tab turns while an agent works. A tab that is moving says the machine is
+// still going from across the room, which is most of what a tab is for.
+func TestWindowTitleSpinnerTurns(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{{Name: "api", Kind: tmux.KindClaude, Managed: true}}))
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy}})
+
+	seen := map[string]bool{}
+	for i := range spinnerFrames {
+		m.spinner = i
+		title := m.windowTitle()
+		frame, _, _ := strings.Cut(title, " ")
+		if frame != spinnerFrames[i] {
+			t.Errorf("spinner %d drew %q, want %q", i, frame, spinnerFrames[i])
+		}
+		seen[frame] = true
+	}
+	if len(seen) != len(spinnerFrames) {
+		t.Errorf("the tab used %d of the %d frames", len(seen), len(spinnerFrames))
+	}
+
+	// Nothing working, nothing turning: an idle berth writes no titles.
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Idle}})
+	before := m.windowTitle()
+	m.spinner++
+	if got := m.windowTitle(); got != before {
+		t.Errorf("with nothing working the title still moved: %q then %q", before, got)
 	}
 }
 

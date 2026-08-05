@@ -706,9 +706,11 @@ func (m *Model) windowTitle() string {
 // that work. Nothing to count at all leaves the title as it was.
 //
 // The glyphs are the list's own, so the tab and the sidebar say the same thing
-// in the same vocabulary. The spinner stands still here: a title is rewritten
-// with an escape sequence rather than redrawn, and animating one would mean
-// writing it ten times a second for a glyph nobody is looking straight at.
+// in the same vocabulary - and the spinner turns here as it turns there. That
+// costs a title written every frame while an agent is working, which is an
+// escape sequence rather than a redraw and stops the moment the last one goes
+// quiet: an idle berth writes nothing. A tab that is moving says the machine is
+// still working from across the room, which is most of what a tab is for.
 //
 // hide_agent_status needs no check here. It stops berth watching the agents at
 // all, so the tally has nothing to count and disappears on its own.
@@ -723,11 +725,13 @@ func (m *Model) titleTally() string {
 		n     int
 	}{
 		{"?", c.Waiting}, // needs you: first, so truncation takes it last
-		{spinnerFrames[0], c.Working},
+		{spinnerFrames[m.spinner%len(spinnerFrames)], c.Working},
 		{"○", c.Idle},
 	} {
 		if p.n > 0 {
-			parts = append(parts, fmt.Sprintf("%s%d", p.glyph, p.n))
+			// A space between the glyph and its count: a tab is a proportional
+			// font at a small size, and "?1" there is a smudge.
+			parts = append(parts, fmt.Sprintf("%s %d", p.glyph, p.n))
 		}
 	}
 	return strings.Join(parts, " ") + " "
@@ -2445,7 +2449,7 @@ func (m *Model) helpText() string {
 		}
 		if !m.cfg.HideWindowTitle {
 			glyphs = append(glyphs,
-				[2]string{"?2 " + spinnerFrames[0] + "1 ○3",
+				[2]string{"? 2 " + spinnerFrames[0] + " 1 ○ 3",
 					"the same three, tallied on the terminal's tab"})
 		}
 		for _, r := range glyphs {

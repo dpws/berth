@@ -95,6 +95,12 @@ type Config struct {
 	// of the two above has to be on for there to be a way of saying it.
 	NotifyWaiting bool `json:"notify_waiting"`
 	NotifyIdle    bool `json:"notify_idle"`
+	// NotifyAgent asks berth-clipd to raise a desktop notification on the
+	// machine it runs on. That is the machine you are sitting at, which over
+	// SSH is not the one berth is on - and on Windows it is the only way to a
+	// notification with words in it, since Windows Terminal understands no
+	// escape sequence for one.
+	NotifyAgent bool `json:"notify_agent"`
 	// NotifyTaskbar marks the terminal's place in the taskbar for as long as
 	// any session is waiting on you. It is not an announcement like the two
 	// above but a state, so it stands on its own: it comes on when the first

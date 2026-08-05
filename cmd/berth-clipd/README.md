@@ -6,6 +6,24 @@ running somewhere else, so `ctrl+y` there pastes a screenshot from here.
 Run it on the machine you are **sitting at**. berth runs on the machine you
 have SSH'd **into**.
 
+Since v0.10 it does one more thing in the same direction, and for the same
+reason: **`POST /notify` raises a desktop notification on this machine.**
+Windows Terminal understands no escape sequence for one — berth tried both
+`OSC 9` and `OSC 777` against it and neither produced anything — so a berth on
+the far end of an SSH connection has no way to put words on your screen. The
+agent is already here, so berth asks it instead.
+
+```sh
+curl -X POST --data "api is waiting on you" http://127.0.0.1:8377/notify
+```
+
+`X-Berth-Title` sets the heading, `berth` by default. On Windows the toast is
+raised through PowerShell, attributed to it — Windows will not show a toast
+from an application it has never been told about, and registering one means
+writing to the registry and the start menu for the sake of a line of text.
+Elsewhere it shells out to `notify-send`. The endpoint takes the same
+`-token` as the rest, and it should: it is a door onto your desktop.
+
 ## Why it exists
 
 A clipboard can only be read by a process on the machine that owns it. No

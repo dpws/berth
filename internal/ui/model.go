@@ -570,6 +570,19 @@ func (m *Model) notifyFor(fresh map[string]agent.Info) tea.Cmd {
 	// name two sessions in a different order each time it told you about them.
 	sort.Strings(said)
 
+	// The agent is asked off the update loop: it is an HTTP request to another
+	// machine, and on Windows that machine starts PowerShell to answer it.
+	// Nothing here waits for it, and a failure is a status line rather than an
+	// error - a notification that did not arrive must not be the reason the
+	// list stopped refreshing.
+	var cmds []tea.Cmd
+	if m.cfg.NotifyAgent {
+		opts := m.clipOptions()
+		for _, s := range said {
+			cmds = append(cmds, notifyAgent(opts, s))
+		}
+	}
+
 	var b strings.Builder
 	if m.cfg.NotifyBell {
 		// One ring however many sessions moved at once: a terminal cannot ring
@@ -581,12 +594,35 @@ func (m *Model) notifyFor(fresh map[string]agent.Info) tea.Cmd {
 			b.WriteString(ansi.Notify(s))
 		}
 	}
-	if b.Len() == 0 {
+	if b.Len() > 0 {
+		// Straight to the terminal rather than into the frame: the frame is
+		// parsed into cells, and a sequence that draws nothing does not
+		// survive it.
+		cmds = append(cmds, tea.Raw(b.String()))
+	}
+	return tea.Batch(cmds...)
+}
+
+// clipOptions is how berth reaches the machine you are sitting at: for an
+// image on its clipboard, or to ask it to put a notification on its screen.
+func (m *Model) clipOptions() clip.Options {
+	return clip.Options{
+		DropDir:    m.cfg.ImageDropDir,
+		CacheDir:   config.ImageCacheDir(),
+		AgentURL:   m.cfg.ClipAgentURL,
+		AgentToken: m.cfg.ClipAgentToken,
+	}
+}
+
+// notifyAgent asks berth-clipd for a notification, and says so only when it
+// fails - a notification that worked has already announced itself.
+func notifyAgent(opts clip.Options, text string) tea.Cmd {
+	return func() tea.Msg {
+		if err := clip.Notify(opts, "berth", text); err != nil {
+			return statusMsg{text: "notification: " + err.Error(), isErr: true}
+		}
 		return nil
 	}
-	// Straight to the terminal rather than into the frame: the frame is parsed
-	// into cells, and a sequence that draws nothing does not survive it.
-	return tea.Raw(b.String())
 }
 
 // syncTitle keeps the title the view will ask for in step with what is
@@ -1730,12 +1766,7 @@ func (m *Model) pasteImage() tea.Cmd {
 		m.setStatus("no session to paste into", true)
 		return nil
 	}
-	opts := clip.Options{
-		DropDir:    m.cfg.ImageDropDir,
-		CacheDir:   config.ImageCacheDir(),
-		AgentURL:   m.cfg.ClipAgentURL,
-		AgentToken: m.cfg.ClipAgentToken,
-	}
+	opts := m.clipOptions()
 	return func() tea.Msg {
 		result, err := clip.Fetch(opts)
 		return imagePasteMsg{result: result, err: err}

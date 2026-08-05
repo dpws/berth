@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -69,6 +70,9 @@ func run(addr, token string) error {
 	})
 	mux.HandleFunc("/image", func(w http.ResponseWriter, r *http.Request) {
 		serveImage(w, r, token)
+	})
+	mux.HandleFunc("/notify", func(w http.ResponseWriter, r *http.Request) {
+		serveNotify(w, r, token)
 	})
 
 	server := &http.Server{
@@ -149,6 +153,54 @@ func serveImage(w http.ResponseWriter, r *http.Request, token string) {
 		log.Println("write failed:", err)
 	}
 }
+
+// maxNotifyBytes bounds a notification. It is a line of text on a desktop;
+// anything longer is either a mistake or someone else's idea of one.
+const maxNotifyBytes = 4 << 10
+
+// serveNotify raises a desktop notification on the machine the agent runs on.
+//
+// This is the other half of what the agent is for. A copy goes out to the
+// terminal berth is talking to, because a terminal knows how to put text on a
+// clipboard - but Windows Terminal has no sequence for raising a notification,
+// so there is nothing to send. The agent is already on the machine the
+// notification belongs on, so berth asks it instead.
+func serveNotify(w http.ResponseWriter, r *http.Request, token string) {
+	if token != "" && r.Header.Get("X-Berth-Token") != token {
+		http.Error(w, "bad or missing token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST a line of text to /notify", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxNotifyBytes))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		http.Error(w, "nothing to say", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(r.Header.Get("X-Berth-Title"))
+	if title == "" {
+		title = "berth"
+	}
+
+	if err := raise(title, text); err != nil {
+		log.Println("notification failed:", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// raise is a variable so tests can stand in for a desktop, which no CI machine
+// has - the same reason readClipboard is one.
+var raise = raiseNotification
 
 // errNoImage means the clipboard works but holds no image.
 var errNoImage = errors.New("no image on the clipboard")

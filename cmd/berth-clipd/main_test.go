@@ -207,3 +207,93 @@ func TestPickImageType(t *testing.T) {
 		}
 	}
 }
+
+// notifyServer stands the handler up with a desktop that only records.
+func notifyServer(t *testing.T, token string) (*httptest.Server, *[]string) {
+	t.Helper()
+	var got []string
+	old := raise
+	raise = func(title, body string) error {
+		got = append(got, title+"|"+body)
+		return nil
+	}
+	t.Cleanup(func() { raise = old })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveNotify(w, r, token)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &got
+}
+
+func TestNotifyRaisesWhatItIsSent(t *testing.T) {
+	srv, got := notifyServer(t, "")
+
+	resp, err := http.Post(srv.URL, "text/plain", strings.NewReader("api is waiting on you"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %s, want 204", resp.Status)
+	}
+	if len(*got) != 1 || (*got)[0] != "berth|api is waiting on you" {
+		t.Errorf("raised %q, want the default title and the body", *got)
+	}
+}
+
+// The endpoint is a door onto the desktop of the machine you are sitting at,
+// so it is closed to anything without the token when one is set.
+func TestNotifyNeedsTheToken(t *testing.T) {
+	srv, got := notifyServer(t, "sesame")
+
+	resp, err := http.Post(srv.URL, "text/plain", strings.NewReader("let me in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("without a token: status = %s, want 403", resp.Status)
+	}
+	if len(*got) != 0 {
+		t.Errorf("a notification was raised without the token: %q", *got)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader("let me in"))
+	req.Header.Set("X-Berth-Token", "sesame")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNoContent {
+		t.Errorf("with the token: status = %s, want 204", resp2.Status)
+	}
+}
+
+func TestNotifyRefusesNonsense(t *testing.T) {
+	srv, got := notifyServer(t, "")
+
+	// A GET is someone poking at it in a browser, not a notification.
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET: status = %s, want 405", resp.Status)
+	}
+
+	// Nothing to say is not a notification either.
+	resp2, err := http.Post(srv.URL, "text/plain", strings.NewReader("   \n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("empty body: status = %s, want 400", resp2.Status)
+	}
+	if len(*got) != 0 {
+		t.Errorf("raised %q, want nothing", *got)
+	}
+}

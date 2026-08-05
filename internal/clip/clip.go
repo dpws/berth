@@ -416,3 +416,50 @@ func imageExtForBytes(data []byte) (string, bool) {
 		return "", false
 	}
 }
+
+// notifyTimeout bounds a notification. The agent has to start PowerShell to
+// raise one on Windows, which is not quick, but berth is not waiting on the
+// answer either - the request runs off the update loop.
+const notifyTimeout = 20 * time.Second
+
+// Notify asks a berth-clipd to raise a desktop notification on the machine it
+// runs on.
+//
+// This is the reverse of everything else here: the image endpoints fetch from
+// that machine, and this one asks it to do something. It is the same road for
+// the same reason - over SSH the machine you are sitting at is the one that
+// should be putting things on screen, and it is the only one that can. Windows
+// Terminal has no escape sequence berth could send instead; the agent is
+// already over there.
+func Notify(o Options, title, body string) error {
+	if o.AgentURL == "" {
+		return errors.New("no clip agent configured")
+	}
+	req, err := http.NewRequest(http.MethodPost,
+		strings.TrimSuffix(o.AgentURL, "/")+"/notify", strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent url %q: %w", o.AgentURL, err)
+	}
+	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	if title != "" {
+		req.Header.Set("X-Berth-Title", title)
+	}
+	if o.AgentToken != "" {
+		req.Header.Set("X-Berth-Token", o.AgentToken)
+	}
+
+	client := &http.Client{Timeout: notifyTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return agentReachError(o.AgentURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		if text := strings.TrimSpace(string(msg)); text != "" {
+			return fmt.Errorf("the clip agent said: %s", text)
+		}
+		return fmt.Errorf("the clip agent answered %s", resp.Status)
+	}
+	return nil
+}

@@ -756,7 +756,7 @@ asks `berth-clipd` — the agent you already run for pasting screenshots — to
 raise one on the machine it runs on, which over SSH is the machine you are
 sitting at rather than the one berth is on. It is the same road as the
 clipboard and travels it for the same reason: the far end is where the screen
-is. It needs `clip_agent_url` pointing at an agent of v0.10 or newer, and says
+is. It needs `clip_agent_url` pointing at an agent of v1.0 or newer, and says
 so in the status line if the agent cannot be reached.
 
 **`notify_taskbar`** is the third, and the odd one out: it is not an

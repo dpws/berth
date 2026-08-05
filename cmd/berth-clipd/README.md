@@ -6,7 +6,7 @@ running somewhere else, so `ctrl+y` there pastes a screenshot from here.
 Run it on the machine you are **sitting at**. berth runs on the machine you
 have SSH'd **into**.
 
-Since v0.10 it does one more thing in the same direction, and for the same
+Since v1.0 it does one more thing in the same direction, and for the same
 reason: **`POST /notify` raises a desktop notification on this machine.**
 Windows Terminal understands no escape sequence for one — berth tried both
 `OSC 9` and `OSC 777` against it and neither produced anything — so a berth on

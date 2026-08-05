@@ -18,6 +18,7 @@ import (
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/doctor"
 	"github.com/dpws/berth/internal/git"
+	"github.com/dpws/berth/internal/host"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/update"
@@ -141,6 +142,12 @@ type Model struct {
 	// clock is what the view asks for the time, so a test can render an age
 	// without racing the wall. Nil means the wall clock.
 	clock func() time.Time
+
+	// host is the last reading of the machine berth is running on, and hostAt
+	// when it was taken - which is what keeps the poll to its own interval
+	// rather than the session list's.
+	host   host.Stats
+	hostAt time.Time
 
 	// gitStatus is what the bar knows, by directory. It is kept per directory
 	// rather than only for the selection so that moving back to a session shows
@@ -277,6 +284,9 @@ type usageTickMsg struct{ gen int }
 
 type usageMsg map[string]usage.Limits
 
+// hostMsg is a reading of the machine berth is running on.
+type hostMsg host.Stats
+
 // gitTickMsg drives the poll of the selected session's repository. Like
 // usageTickMsg it carries the generation that scheduled it, so a tick left in
 // flight by a chain that has since been replaced is dropped rather than
@@ -403,6 +413,22 @@ func (m *Model) gitCmd() tea.Cmd {
 	}
 	m.gitDir = dir
 	return readGit(dir)
+}
+
+// hostMinInterval is how often the machine is looked at, whatever the session
+// list is polling at. The reading is cheap on Linux and two small programs on
+// macOS, and none of the three numbers moves fast enough to be worth more: the
+// load average is itself an average over a minute.
+const hostMinInterval = 2 * time.Second
+
+// readHost takes a reading of the machine off the update loop. Reading /proc
+// costs nothing, but the disk is a filesystem call that a mount gone away can
+// sit on, and that must not be the update loop's problem.
+func (m *Model) readHost() tea.Cmd {
+	if !m.cfg.ShowHost || time.Since(m.hostAt) < hostMinInterval {
+		return nil
+	}
+	return func() tea.Msg { return hostMsg(host.Read()) }
 }
 
 // readUsage re-reads the agents' logs off the update loop.
@@ -554,7 +580,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case tickMsg:
-		return tea.Batch(listSessions(), tickCmd(m.cfg.RefreshMillis))
+		return tea.Batch(listSessions(), m.readHost(), tickCmd(m.cfg.RefreshMillis))
+
+	case hostMsg:
+		m.host = host.Stats(msg)
+		m.hostAt = time.Now()
+		return nil
 
 	case spinnerTickMsg:
 		m.spinnerRunning = false

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/config"
+	"github.com/dpws/berth/internal/host"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/usage"
 )
@@ -604,5 +605,147 @@ func TestWindowTitleHasNoTallyWithoutAgentStatus(t *testing.T) {
 	m.readAgents(m.sessions)
 	if got := m.windowTitle(); got != "api (claude) — berth" {
 		t.Errorf("title = %q, want no tally when the agents are not watched", got)
+	}
+}
+
+// The host block is opt-in: berth is a session list first, and the machine is
+// usually not the thing in question.
+func TestHostBlockIsOffUntilAskedFor(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("plain"))
+	m.host = host.Stats{
+		CPU:  host.Meter{Percent: 24, Left: "0.96", Known: true},
+		Mem:  host.Meter{Percent: 61, Left: "4.8G", Known: true},
+		Disk: host.Meter{Percent: 72, Left: "31G", Known: true},
+	}
+
+	if got := m.hostBlock(28, 10); got != nil {
+		t.Errorf("the block drew without being asked for: %q", got)
+	}
+
+	m.cfg.ShowHost = true
+	got := m.hostBlock(28, 10)
+	// A divider and the three meters.
+	if len(got) != 4 {
+		t.Fatalf("block has %d rows, want 4: %q", len(got), ansi.Strip(strings.Join(got, "|")))
+	}
+	body := ansi.Strip(strings.Join(got, "\n"))
+	for _, want := range []string{"cpu", "0.96", "mem", "4.8G", "disk", "31G", "61%"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("block = %q, want %q on it", body, want)
+		}
+	}
+}
+
+// It draws for any session. The rate limits are about the plan an agent spends,
+// but the machine is underneath a plain shell just the same.
+func TestHostBlockDrawsForAShellToo(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ShowHost = true
+	m.Update(sessions("dots"))
+	m.host = host.Stats{Mem: host.Meter{Percent: 61, Left: "4.8G", Known: true}}
+
+	if got := m.hostBlock(28, 10); len(got) == 0 {
+		t.Error("a shell session drew no host block")
+	}
+}
+
+// A figure the machine would not give up is left out. Drawing it as an empty
+// bar would say the machine is idle, which is a different claim from silence.
+func TestUnknownHostMetersAreLeftOut(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ShowHost = true
+	m.Update(sessions("plain"))
+	m.host = host.Stats{
+		CPU:  host.Meter{Percent: 24, Left: "0.96", Known: true},
+		Disk: host.Meter{Percent: 72, Left: "31G", Known: true},
+	}
+
+	got := m.hostBlock(28, 10)
+	body := ansi.Strip(strings.Join(got, "\n"))
+	if strings.Contains(body, "mem") {
+		t.Errorf("block = %q, want no row for the reading that failed", body)
+	}
+	if len(got) != 3 {
+		t.Errorf("block has %d rows, want the divider and the two that read", len(got))
+	}
+
+	// Nothing at all read: no block, not an empty one under a divider.
+	m.host = host.Stats{}
+	if got := m.hostBlock(28, 10); got != nil {
+		t.Errorf("a machine berth cannot read drew %q", got)
+	}
+}
+
+// The block is drawn into fixed-width lines like everything else in the column.
+func TestHostBlockFitsTheColumn(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ShowHost = true
+	m.Update(sessions("plain"))
+	m.host = host.Stats{
+		CPU:  host.Meter{Percent: 194, Left: "7.76", Known: true},
+		Mem:  host.Meter{Percent: 61, Left: "4.8G", Known: true},
+		Disk: host.Meter{Percent: 72, Left: "406G", Known: true},
+	}
+
+	for _, w := range []int{12, 16, 20, 28, 40} {
+		for _, line := range m.hostBlock(w, 10) {
+			if got := ansi.StringWidth(line); got > w {
+				t.Errorf("w=%d: row is %d cells: %q", w, got, ansi.Strip(line))
+			}
+		}
+	}
+	for _, budget := range []int{0, 1, 2, 3, 4, 8} {
+		if got := m.hostBlock(28, budget); len(got) > budget {
+			t.Errorf("budget %d produced %d rows", budget, len(got))
+		}
+	}
+}
+
+// The sidebar is drawn as fixed-size lines, so a second block under the limits
+// has to be counted the same way the first one is or the legend falls off.
+func TestSidebarStaysExactlyHighWithTheHostBlock(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ShowHost = true
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "work", Kind: tmux.KindCodex, Managed: true},
+		{Name: "other", Kind: tmux.KindClaude, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindCodex: {Kind: tmux.KindCodex, Windows: []usage.Window{
+			{Label: "5h", Percent: 28, ResetsAt: time.Now().Add(time.Hour)},
+			{Label: "week", Percent: 61, ResetsAt: time.Now().Add(48 * time.Hour)},
+		}},
+	}
+	m.host = host.Stats{
+		CPU:  host.Meter{Percent: 24, Left: "0.96", Known: true},
+		Mem:  host.Meter{Percent: 61, Left: "4.8G", Known: true},
+		Disk: host.Meter{Percent: 72, Left: "31G", Known: true},
+	}
+
+	for _, h := range []int{1, 2, 3, 5, 8, 12, 20, 30} {
+		lines := m.sidebarLines(28, h)
+		if len(lines) != h {
+			t.Fatalf("sidebarLines(28, %d) returned %d lines", h, len(lines))
+		}
+		for i, line := range lines {
+			if got := ansi.StringWidth(line); got != 28 {
+				t.Errorf("h=%d line %d is %d cells: %q", h, i, got, ansi.Strip(line))
+			}
+		}
+		if len(m.rowSessions) != len(lines) {
+			t.Errorf("h=%d: %d rows mapped for %d lines", h, len(m.rowSessions), len(lines))
+		}
+		// The list must still get a session, however many blocks are stacked
+		// under it - a sidebar of meters and no sessions is not a sidebar.
+		shown := 0
+		for _, s := range m.rowSessions {
+			if s >= 0 {
+				shown++
+			}
+		}
+		if h >= 5 && shown == 0 {
+			t.Errorf("h=%d drew no session rows", h)
+		}
 	}
 }

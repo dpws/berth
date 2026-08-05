@@ -54,7 +54,8 @@ func (m *Model) sidebarLines(w, h int) []string {
 	// for a session or two: a sidebar showing rate limits and no sessions is
 	// not a sidebar, and a short window used to produce exactly that.
 	usage := m.usageBlock(w, h-len(lines)-2-minListRows)
-	reserved := 2 + len(usage)
+	hostRows := m.hostBlock(w, h-len(lines)-2-len(usage)-minListRows)
+	reserved := 2 + len(usage) + len(hostRows)
 	listHeight := h - len(lines) - reserved
 	visible := m.visibleSessions()
 
@@ -83,6 +84,10 @@ func (m *Model) sidebarLines(w, h int) []string {
 		blank()
 	}
 	for _, line := range usage {
+		lines = append(lines, pad.Render(line))
+		blank()
+	}
+	for _, line := range hostRows {
 		lines = append(lines, pad.Render(line))
 		blank()
 	}

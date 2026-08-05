@@ -79,6 +79,11 @@ type Config struct {
 	// HideAgentAge drops the how-long-it-has-been-doing-that time from the
 	// right of that line.
 	HideAgentAge bool `json:"hide_agent_age"`
+	// ShowHost adds a block under the rate limits with the load, memory and
+	// disk of the machine berth is running on. It is off by default: berth is
+	// a session list first, and most of the time the machine is not the thing
+	// in question.
+	ShowHost bool `json:"show_host"`
 	// CheckUpdates asks GitHub once a day whether there is a newer release and
 	// says so in the header. It is the only request berth makes on its own;
 	// nothing is sent but the ask, and nothing is ever installed without

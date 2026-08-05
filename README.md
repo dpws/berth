@@ -184,6 +184,7 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "hide_agent_status": false,
   "hide_task": false,
   "hide_agent_age": false,
+  "show_host": false,
   "check_updates": true,
   "hide_window_title": false,
   "usage_refresh_seconds": 30,
@@ -656,6 +657,48 @@ The block costs four rows and is read from disk, so it polls far slower than
 the session list: `usage_refresh_seconds` (default 30). Reads are incremental —
 only the tail of each transcript is parsed after the first pass. Set
 `"hide_usage": true` to turn the whole thing off.
+
+## The machine
+
+`"show_host": true` — or **Host meters** in `,` — adds a second block under the
+limits, in the same shape, for the box berth is running on:
+
+```
+│────────────────────────────│
+│ 5h   ▓░░░░░░░░    8% 2h 57m│
+│ week ▓▓▓▓▓▓▓▓░   88% 2d 12h│
+│────────────────────────────│
+│ cpu  ▓▓▓▓▓▓▓░░░░   67% 2.69│
+│ mem  ▓▓▓▓▓▓░░░░░   55% 7.1G│
+│ disk ▓░░░░░░░░░░    8% 406G│
+│────────────────────────────│
+```
+
+It reads the same way as the rate limits above it: the bar and the percentage
+are what is **gone**, and the figure on the right is what is **left** — memory
+and disk free, and for `cpu` the load average the percentage was worked out
+from. Anything past 90% turns red.
+
+`cpu` is the one-minute load average divided by the number of processors, so
+100% means they are all busy and it can go past that — load counts what is
+waiting to run as well as what is running, and a machine three deep reads as
+300%. That is a different question from "how busy is this core right now", and
+the load beside the bar is there so the figure stays checkable against `uptime`.
+
+`mem` counts what could still be handed to a program that asked, not what is
+unallocated: both systems spend every spare page on cache and give it back on
+demand, so `MemFree` on Linux and `Pages free` on macOS read as nearly nothing
+on a machine that has been up a while, while most of it is available. `disk` is
+the root filesystem, and its percentage is worked out the way `df` works it out
+— against what is used plus what you could still write, rather than the whole
+device, so berth's figure and `df`'s agree.
+
+It is off by default because berth is a session list first. Turned on, it is
+read straight from the kernel's own accounting — `/proc` on Linux, `sysctl` and
+`vm_stat` on macOS — at most every two seconds, whatever the session list is
+polling at. Nothing is sent anywhere and nothing needs privileges. A number the
+machine will not give up leaves its row out rather than drawing an empty bar,
+and a system berth has no reader for shows no block at all.
 
 ## Pasting images
 

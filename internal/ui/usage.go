@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/dpws/berth/internal/host"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/usage"
 )
@@ -48,6 +49,12 @@ func barWidthFor(w, labelW, resetW int) int {
 
 // usageMinRows is the smallest block worth drawing: a divider plus one line.
 const usageMinRows = 2
+
+// hostBarKind is what the host meters are tinted as. It is not an agent, so it
+// falls through to the colour a plain session gets - the machine is the thing
+// underneath all of them rather than one of them. Filling up still turns the
+// bar red, which is the whole point of drawing it.
+const hostBarKind = "host"
 
 // usageBlock renders the selected session's rate limits as w-wide lines,
 // including the divider above them. It returns nil when there is nothing to
@@ -116,10 +123,23 @@ func usageRows(l usage.Limits, kind string, w int) []string {
 }
 
 // usageRow lays out one window as: label, meter, value, and how long the window
-// has left, right-aligned to w. The meter is dropped when there is no room for
-// it, and the time left before the number is: a percentage with no idea when it
-// rolls over still says something, the other way round says nothing.
+// has left.
 func usageRow(win usage.Window, kind string, w, labelW, resetW int, now time.Time) string {
+	tail := ""
+	if resetW > 0 {
+		tail = padLeft(untilReset(win, now), resetW)
+	}
+	return usageRowWith(win, kind, w, labelW, resetW, tail)
+}
+
+// usageRowWith is that layout with the right-hand column supplied, so the host
+// block can borrow it: label, meter, percentage, and whatever is left of the
+// thing, right-aligned to w. The meter is dropped when there is no room for it,
+// and the right-hand column before the number is - a percentage with nothing
+// beside it still says something, the other way round says nothing.
+//
+// tailW is what that column has been padded to, and 0 means there is none.
+func usageRowWith(win usage.Window, kind string, w, labelW, tailW int, right string) string {
 	label := footerStyle.Render(padTo(truncate(win.Label, labelW), labelW))
 
 	// row lays out " " + label + [" " + bar] + gap + value + [" " + reset],
@@ -142,20 +162,19 @@ func usageRow(win usage.Window, kind string, w, labelW, resetW int, now time.Tim
 	value := fmt.Sprintf("%3.0f%%", win.Percent)
 	styledValue := itemStyle.Render(value)
 
-	// The time left sits in a column of its own, so a "52m" beside a "6d 23h"
-	// does not walk the percentages out of line with each other.
+	// The right-hand column is a column: a "52m" beside a "6d 23h" would
+	// otherwise walk the percentages out of line with each other.
 	tail, styled := value, styledValue
-	if resetW > 0 {
-		left := padLeft(untilReset(win, now), resetW)
-		tail += " " + left
-		styled += " " + faintStyle.Render(left)
+	if tailW > 0 {
+		tail += " " + right
+		styled += " " + faintStyle.Render(right)
 	}
 
 	for _, attempt := range []struct{ bar, tail, styled string }{
-		{usageBar(win.Percent, kind, barWidthFor(w, labelW, resetW)), tail, styled},
+		{usageBar(win.Percent, kind, barWidthFor(w, labelW, tailW)), tail, styled},
 		{"", tail, styled},
-		// No room for both: the meter goes before the figures do, and the time
-		// left before the percentage.
+		// No room for both: the meter goes before the figures do, and the
+		// right-hand column before the percentage.
 		{usageBar(win.Percent, kind, barWidthFor(w, labelW, 0)), value, styledValue},
 		{"", value, styledValue},
 	} {
@@ -245,4 +264,63 @@ func usageBar(percent float64, kind string, width int) string {
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(strings.Repeat("▓", filled)) +
 		faintStyle.Render(strings.Repeat("░", width-filled))
+}
+
+// hostBlock renders the machine berth is running on, in the same shape as the
+// rate limits above it: a divider, then a meter per thing with what is left of
+// it on the right. It returns nil when the block is off, when the machine keeps
+// its accounting somewhere berth cannot read, or when there is no room.
+//
+// It sits under the limits because it answers a different question. The limits
+// are about the plan you are spending; this is about the box the work runs on,
+// and it is the second thing you want to know when an agent has gone quiet.
+func (m *Model) hostBlock(w, budget int) []string {
+	if !m.cfg.ShowHost || budget < usageMinRows || m.host.Empty() {
+		return nil
+	}
+
+	// The labels are fixed, so the column is too - no need to measure them.
+	const labelW = 4
+	meters := []struct {
+		label string
+		meter host.Meter
+	}{
+		{"cpu", m.host.CPU},
+		{"mem", m.host.Mem},
+		{"disk", m.host.Disk},
+	}
+
+	leftW := 0
+	for _, x := range meters {
+		if x.meter.Known && ansi.StringWidth(x.meter.Left) > leftW {
+			leftW = ansi.StringWidth(x.meter.Left)
+		}
+	}
+
+	rows := make([]string, 0, len(meters))
+	for _, x := range meters {
+		if !x.meter.Known {
+			// A number the machine would not give up is left out rather than
+			// drawn as a full or empty bar, either of which would be a lie.
+			continue
+		}
+		rows = append(rows, hostRow(x.label, x.meter, w, labelW, leftW))
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if room := budget - 1; len(rows) > room {
+		rows = rows[:room]
+	}
+
+	out := make([]string, 0, len(rows)+1)
+	out = append(out, dividerStyle.Render(strings.Repeat("─", max(0, w))))
+	return append(out, rows...)
+}
+
+// hostRow lays one meter out the way a usage row is laid out, so the two blocks
+// read as one column of figures rather than two designs stacked.
+func hostRow(label string, meter host.Meter, w, labelW, leftW int) string {
+	win := usage.Window{Label: label, Percent: meter.Percent}
+	return usageRowWith(win, hostBarKind, w, labelW, leftW, padLeft(meter.Left, leftW))
 }

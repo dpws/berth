@@ -754,6 +754,15 @@ turn that finished, which fires more often and for sessions you were not
 waiting on. Neither does anything on its own: with no bell and no desktop
 notification there is no way of saying it, and berth stays quiet.
 
+**A bell is only as loud as your terminal makes it.** berth sends the signal;
+what happens to it is a terminal setting, and the useful ones are visual rather
+than audible. In Windows Terminal, `"bellStyle": "all"` under
+`profiles.defaults` flashes the taskbar icon as well as playing the sound —
+the default, `"audible"`, is a beep and nothing else. kitty has `bell_on_tab`
+and `visual_bell_duration`, iTerm2 has a "Flash visual bell" checkbox. berth
+cannot check any of these, let alone set them: over SSH they live on the
+machine you are sitting at, not the one berth is running on.
+
 Only changes are announced. berth's first reading of a session teaches it where
 that session stands; otherwise starting berth beside three idle sessions would
 ring three times for news hours old, and a session sitting at a permission

@@ -145,6 +145,79 @@ func TestTightBudgetKeepsTheNoteOverTheLastMeter(t *testing.T) {
 	}
 }
 
+// A reading goes stale as soon as the agent stops running, which for Codex is
+// most of the time. The reset is a fixed moment it was told about, so it is
+// still true then - and that is exactly when you want to know it.
+func TestResetShowsAlongsideAStaleReading(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "work", Kind: tmux.KindCodex, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindCodex: {Kind: tmux.KindCodex, Sampled: time.Now().Add(-6 * time.Hour),
+			Windows: []usage.Window{
+				{Label: "week", Percent: 52, ResetsAt: time.Now().Add(3 * 24 * time.Hour)},
+			}},
+	}
+
+	block := ansi.Strip(strings.Join(m.usageBlock(28, 10), "\n"))
+	if !strings.Contains(block, "resets ") {
+		t.Errorf("block = %q, want the reset shown", block)
+	}
+	if !strings.Contains(block, "as of ") {
+		t.Errorf("block = %q, want the age still shown beside it", block)
+	}
+	// Three days out: a bare clock time would read as this afternoon.
+	if strings.Contains(block, "resets "+time.Now().Add(3*24*time.Hour).Format("15:04")+"\n") {
+		t.Errorf("block = %q, want the reset day named", block)
+	}
+}
+
+// With room for one line under the meters, the reset is the one to keep: the
+// meters cannot be read for it, and it does not go out of date.
+func TestTightBudgetKeepsTheResetOverTheAge(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "work", Kind: tmux.KindCodex, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindCodex: {Kind: tmux.KindCodex, Sampled: time.Now().Add(-6 * time.Hour),
+			Windows: []usage.Window{
+				{Label: "5h", Percent: 28, ResetsAt: time.Now().Add(2 * time.Hour)},
+			}},
+	}
+
+	// Divider, the meter, one note.
+	got := m.usageBlock(28, 3)
+	if len(got) != 3 {
+		t.Fatalf("block has %d rows, want 3: %q", len(got), ansi.Strip(strings.Join(got, "|")))
+	}
+	if last := ansi.Strip(got[2]); !strings.Contains(last, "resets") {
+		t.Errorf("last row = %q, want the reset", last)
+	}
+}
+
+// A window whose reset has already passed has rolled over; the agent simply has
+// not run since to say so. Reporting it would name a time in the past.
+func TestPastResetsAreNotShown(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	l := usage.Limits{Windows: []usage.Window{
+		{Label: "5h", Percent: 90, ResetsAt: now.Add(-time.Hour)},
+		{Label: "week", Percent: 40, ResetsAt: now.Add(48 * time.Hour)},
+	}}
+	if got := soonestReset(l, now); !got.Equal(now.Add(48 * time.Hour)) {
+		t.Errorf("soonestReset = %v, want the weekly boundary still ahead", got)
+	}
+
+	l.Windows = l.Windows[:1]
+	if got := soonestReset(l, now); !got.IsZero() {
+		t.Errorf("soonestReset = %v, want nothing when every boundary has passed", got)
+	}
+	if got := usageNotes(l, 28, now); len(got) != 0 {
+		t.Errorf("notes = %q, want none", got)
+	}
+}
+
 func TestUsageBlockHiddenByConfig(t *testing.T) {
 	m := newTestModel()
 	m.cfg.HideUsage = true
@@ -525,15 +598,15 @@ func TestWindowTitleHasNoTallyWithoutAgentStatus(t *testing.T) {
 // days old. "as of 14:22" alone would read as this afternoon.
 func TestStaleNoteNamesTheDayWhenItIsNotToday(t *testing.T) {
 	now := time.Date(2026, 8, 3, 22, 40, 0, 0, time.UTC)
-	if got := sampledAt(now.Add(-2*time.Hour), now); got != "20:40" {
-		t.Errorf("sampledAt(today) = %q, want the clock time alone", got)
+	if got := dayTime(now.Add(-2*time.Hour), now); got != "20:40" {
+		t.Errorf("dayTime(today) = %q, want the clock time alone", got)
 	}
-	if got := sampledAt(now.Add(-3*24*time.Hour), now); got != "Jul 31 22:40" {
-		t.Errorf("sampledAt(3 days ago) = %q, want the day named", got)
+	if got := dayTime(now.Add(-3*24*time.Hour), now); got != "Jul 31 22:40" {
+		t.Errorf("dayTime(3 days ago) = %q, want the day named", got)
 	}
 	// Just before midnight is still another day, not "seven hours ago".
-	if got := sampledAt(now.Add(-23*time.Hour), now); got != "Aug 2 23:40" {
-		t.Errorf("sampledAt(yesterday) = %q, want the day named", got)
+	if got := dayTime(now.Add(-23*time.Hour), now); got != "Aug 2 23:40" {
+		t.Errorf("dayTime(yesterday) = %q, want the day named", got)
 	}
 }
 
@@ -547,11 +620,11 @@ func TestStaleNoteIsInTheReadersOwnZone(t *testing.T) {
 	now := time.Date(2026, 8, 4, 6, 0, 0, 0, time.UTC).In(la) // 23:00 on Aug 3 in LA
 	// Tomorrow by the stamp, still this evening on the reader's clock.
 	at := time.Date(2026, 8, 4, 4, 30, 0, 0, time.UTC)
-	if got := sampledAt(at, now); got != "21:30" {
-		t.Errorf("sampledAt(this evening) = %q, want the local clock time alone", got)
+	if got := dayTime(at, now); got != "21:30" {
+		t.Errorf("dayTime(this evening) = %q, want the local clock time alone", got)
 	}
 	// And a day back is a day back in the same zone, not in UTC's.
-	if got := sampledAt(at.Add(-24*time.Hour), now); got != "Aug 2 21:30" {
-		t.Errorf("sampledAt(yesterday evening) = %q, want the local day and time", got)
+	if got := dayTime(at.Add(-24*time.Hour), now); got != "Aug 2 21:30" {
+		t.Errorf("dayTime(yesterday evening) = %q, want the local day and time", got)
 	}
 }

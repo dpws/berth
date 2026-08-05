@@ -68,21 +68,26 @@ func (m *Model) usageBlock(w, budget int) []string {
 	if !ok {
 		return nil // not read yet
 	}
-	rows, note := usageRows(limits, kind, w)
-	if len(rows) == 0 && note == "" {
+	rows, notes := usageRows(limits, kind, w)
+	if len(rows) == 0 && len(notes) == 0 {
 		return nil
 	}
 	// The divider costs a row, so the block can only be as tall as its budget.
-	// The note is the row that says when the numbers were taken, so it outranks
-	// the last meter when there is not room for both - but not the only meter,
-	// since "as of" over nothing says less than a figure with no date on it.
+	// The notes are what the meters do not say - when the window rolls over,
+	// and how old the reading is - so they outrank the last meters when there
+	// is not room for both. Never the only meter, though: a note over nothing
+	// says less than a figure with no date on it.
 	room := budget - 1
-	switch {
-	case note == "":
-	case len(rows) < room:
+	keep := len(rows)
+	if len(rows)+len(notes) > room {
+		keep = min(len(rows), max(1, room-len(notes)))
+	}
+	rows = rows[:keep:keep]
+	for _, note := range notes {
+		if len(rows) >= room {
+			break
+		}
 		rows = append(rows, note)
-	case room >= 2:
-		rows = append(rows[:room-1:room-1], note)
 	}
 	if len(rows) > room {
 		rows = rows[:room]
@@ -93,15 +98,15 @@ func (m *Model) usageBlock(w, budget int) []string {
 	return append(out, rows...)
 }
 
-// usageRows renders the body of the block, without the divider. The note comes
-// back apart from the meters because it is the last row and so the first the
-// budget would cut, and it is worth more than the meter it displaces.
-func usageRows(l usage.Limits, kind string, w int) (rows []string, note string) {
+// usageRows renders the body of the block, without the divider. The notes come
+// back apart from the meters because they are the last rows and so the first
+// the budget would cut, and they are worth more than the meters they displace.
+func usageRows(l usage.Limits, kind string, w int) (rows []string, notes []string) {
 	if l.Empty() {
 		if l.Err == nil {
-			return nil, ""
+			return nil, nil
 		}
-		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}, ""
+		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}, nil
 	}
 
 	// One label column for the block, as wide as its widest row needs.
@@ -119,7 +124,7 @@ func usageRows(l usage.Limits, kind string, w int) (rows []string, note string) 
 	for _, win := range l.Windows {
 		rows = append(rows, usageRow(win, kind, w, labelW))
 	}
-	return rows, usageNote(l, w)
+	return rows, usageNotes(l, w, time.Now())
 }
 
 // usageRow lays out one window as: label, meter, value, right-aligned to w.
@@ -180,31 +185,44 @@ func usageBar(percent float64, kind string, width int) string {
 		faintStyle.Render(strings.Repeat("░", width-filled))
 }
 
-// usageNote is the line under the meters: when the window rolls over, or a
-// reminder that the numbers are berth's own tally.
-func usageNote(l usage.Limits, w int) string {
-	note := ""
+// usageNotes are the lines under the meters: when the window rolls over, and
+// how old the reading is.
+//
+// The reset leads. It is the thing the meters cannot be read for - a bar most
+// of the way across says nothing about when you get the room back - and it
+// stays true however old the reading is, since it is a fixed moment the agent
+// was told about rather than anything berth is measuring. "as of" only
+// qualifies how much to trust the percentage, so on a sidebar with room for
+// one line it is the one to lose.
+func usageNotes(l usage.Limits, w int, now time.Time) []string {
+	line := func(s string) string {
+		return " " + faintStyle.Render(truncate(s, max(1, w-1)))
+	}
+
+	var out []string
+	if next := soonestReset(l, now); !next.IsZero() {
+		out = append(out, line("resets "+dayTime(next, now)))
+	}
 	// Numbers only arrive while an agent is running, so old ones say when they
 	// were taken rather than pretending to be current.
-	if age := time.Since(l.Sampled); !l.Sampled.IsZero() && age > usageStaleAfter {
-		note = "as of " + sampledAt(l.Sampled, time.Now())
-	} else if next := soonestReset(l); !next.IsZero() {
-		note = "resets " + next.Format("15:04")
+	if !l.Sampled.IsZero() && now.Sub(l.Sampled) > usageStaleAfter {
+		out = append(out, line("as of "+dayTime(l.Sampled, now)))
 	}
-	if note == "" {
-		return ""
-	}
-	return " " + faintStyle.Render(truncate(note, max(1, w-1)))
+	return out
 }
 
-// sampledAt says when a reading was taken. A clock time alone reads as today,
-// and a reading easily is not: Codex meters some models separately and berth
-// keeps the last word on every bucket, so the age of the block is the age of
-// whichever one has gone longest untouched - days, for a model tried once.
+// dayTime writes a moment as a clock time, naming the day when it is not
+// today. Both sides of the block need that. A reading easily is not from today:
+// Codex meters some models separately and berth keeps the last word on every
+// bucket, so the age of the block is the age of whichever one has gone longest
+// untouched - days, for a model tried once. A reset easily is not either: a
+// weekly window rolls over up to seven days out, and "resets 10:15" for
+// something three days away is worse than saying nothing.
 //
-// Codex stamps its rollouts in UTC, so the reading is moved into the zone the
-// clock on the wall is in before either the day or the time is read off it.
-func sampledAt(at, now time.Time) string {
+// Codex stamps its rollouts in UTC and gives reset times as unix seconds, so
+// either is moved into the zone the clock on the wall is in before the day or
+// the time is read off it.
+func dayTime(at, now time.Time) string {
 	const day = "2006-01-02"
 	at = at.In(now.Location())
 	if at.Format(day) == now.Format(day) {
@@ -213,10 +231,11 @@ func sampledAt(at, now time.Time) string {
 	return at.Format("Jan 2 15:04")
 }
 
-// soonestReset returns the first window boundary still ahead of us.
-func soonestReset(l usage.Limits) time.Time {
+// soonestReset returns the first window boundary still ahead of us. One that
+// has passed is left out: the window has already rolled over, and the agent
+// simply has not been run since to say so.
+func soonestReset(l usage.Limits, now time.Time) time.Time {
 	var out time.Time
-	now := time.Now()
 	for _, win := range l.Windows {
 		if win.ResetsAt.IsZero() || win.ResetsAt.Before(now) {
 			continue

@@ -604,6 +604,20 @@ only refresh while a Claude session is running, so a reading older than twenty
 minutes is labelled `as of 14:05` rather than passed off as live — with the day
 named too (`as of Aug 2 14:05`) once it is no longer today's.
 
+**Under the meters, when the agent said one: `resets Aug 8 10:15`** — the next
+window boundary still ahead, whichever window gets there first. It sits beside
+the age rather than instead of it, since a reading going stale does not make the
+reset wrong: it is a fixed moment the agent was told about, not something berth
+is measuring, and a stale block is exactly when "when do I get it back?" is the
+question. The day is named unless it is today's, because a weekly window rolls
+over up to seven days out and `resets 10:15` for something three days away is
+worse than saying nothing. A boundary already behind us is left out — that
+window has rolled over, and the agent has simply not run since to say so.
+
+On a short terminal the block gives up rows from the bottom, and the reset is
+the last note standing: the meters cannot be read for it, while `as of` only
+qualifies a percentage that is on screen anyway.
+
 **What berth will not do.** Claude Code's `/usage` reaches an internal endpoint
 with the Claude Code login token. Driving that from another program is
 automated access to a subscription without an API key, which [Anthropic's terms

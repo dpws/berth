@@ -185,6 +185,8 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "hide_task": false,
   "hide_agent_age": false,
   "show_host": false,
+  "notify": "off",
+  "notify_on": ["waiting"],
   "check_updates": true,
   "hide_window_title": false,
   "usage_refresh_seconds": 30,
@@ -717,6 +719,38 @@ read straight from the kernel's own accounting — `/proc` on Linux, `sysctl` an
 polling at. Nothing is sent anywhere and nothing needs privileges. A number the
 machine will not give up leaves its row out rather than drawing an empty bar,
 and a system berth has no reader for shows no block at all.
+
+## Being told
+
+Berth watches what every agent is doing anyway, which means it knows the moment
+one of them starts needing you. `"notify"` turns that into something you can
+hear from another window:
+
+```json
+{ "notify": "both", "notify_on": ["waiting", "idle"] }
+```
+
+`"bell"` rings the terminal — universally supported, and most terminals mark
+the tab as having activity even with the audible bell off, though a beep says
+nothing about *which* session. `"desktop"` asks the terminal to raise a real
+notification, naming the session: `api is waiting on you`. That is OSC 9, so
+like a copy it is your terminal that raises it — **berth running on a box
+across an SSH connection notifies the machine you are sitting at**. kitty,
+WezTerm, iTerm2, Windows Terminal and foot understand it; terminals that do not
+ignore it silently, which is why `"both"` exists. `"off"` is the default.
+
+`notify_on` picks the moments. `waiting` is a session blocked on a question or
+a permission prompt — the one that is actually costing you time, and the
+default when you turn any of this on. `idle` is a turn that finished, which
+fires more often and for sessions you were not waiting on.
+
+Only changes are announced. berth's first reading of a session teaches it where
+that session stands; otherwise starting berth beside three idle sessions would
+ring three times for news hours old, and a session sitting at a permission
+prompt would announce itself again every couple of seconds. Only work turning
+into idle counts as finished, so a session going quiet after answering you is
+not reported as having done something. Several sessions moving at once ring
+once between them and raise one notification each.
 
 ## Pasting images
 

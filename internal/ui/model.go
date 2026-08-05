@@ -149,6 +149,10 @@ type Model struct {
 	host   host.Stats
 	hostAt time.Time
 
+	// seen is what each session's agent was doing at the last reading, which is
+	// what makes a change a change. Nil until the first reading has landed.
+	seen map[string]agent.Status
+
 	// gitStatus is what the bar knows, by directory. It is kept per directory
 	// rather than only for the selection so that moving back to a session shows
 	// its branch at once instead of blanking until the next read lands.
@@ -456,11 +460,86 @@ func checkForUpdate(current string) tea.Cmd {
 // readAgents refreshes what each session's agent is doing. It reads small
 // files and the tails of logs it is already following, so it rides along with
 // the session list rather than polling on its own.
-func (m *Model) readAgents(sessions []tmux.Session) {
+//
+// It returns whatever should be sent to the terminal about what changed, since
+// the moments worth telling you about are exactly the ones visible here: the
+// difference between what a session was doing and what it is doing now.
+func (m *Model) readAgents(sessions []tmux.Session) tea.Cmd {
 	if m.agentWatcher == nil {
-		return
+		return nil
 	}
-	m.agents = m.agentWatcher.Refresh(sessions)
+	fresh := m.agentWatcher.Refresh(sessions)
+	cmd := m.notifyFor(fresh)
+	m.agents = fresh
+	return cmd
+}
+
+// notifyFor works out what to say about the change from the last reading to
+// this one, and returns the command that says it.
+//
+// A session berth has not seen before is recorded and left alone. Otherwise
+// starting berth with three sessions sitting idle would ring three times for
+// news that is hours old, and reconnecting to a waiting session would announce
+// it again every time.
+func (m *Model) notifyFor(fresh map[string]agent.Info) tea.Cmd {
+	if m.seen == nil {
+		// First reading of the run: learn where everything stands.
+		m.seen = make(map[string]agent.Status, len(fresh))
+		for name, info := range fresh {
+			m.seen[name] = info.Status
+		}
+		return nil
+	}
+
+	var said []string
+	for name, info := range fresh {
+		was, known := m.seen[name]
+		m.seen[name] = info.Status
+		if !known || was == info.Status {
+			continue
+		}
+		switch {
+		case info.Status.NeedsInput() && m.cfg.NotifiesOn(config.NotifyWaiting):
+			said = append(said, safeTitle(name)+" is waiting on you")
+		case info.Status == agent.Idle && was.Active() && m.cfg.NotifiesOn(config.NotifyIdle):
+			// Only from work to idle. Anything else - a session berth has just
+			// started following, one coming back from waiting - is not a turn
+			// that finished.
+			said = append(said, safeTitle(name)+" has finished")
+		}
+	}
+	// Sessions that have gone take their history with them, so a name reused
+	// later starts over rather than being compared against a dead session.
+	for name := range m.seen {
+		if _, ok := fresh[name]; !ok {
+			delete(m.seen, name)
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+
+	// Said in a stable order, since a map is not one, and berth would otherwise
+	// name two sessions in a different order each time it told you about them.
+	sort.Strings(said)
+
+	var b strings.Builder
+	if m.cfg.Rings() {
+		// One ring however many sessions moved at once: a terminal cannot ring
+		// twice as loudly, and three bells in a row is an alarm.
+		b.WriteString("\a")
+	}
+	if m.cfg.Raises() {
+		for _, s := range said {
+			b.WriteString(ansi.Notify(s))
+		}
+	}
+	if b.Len() == 0 {
+		return nil
+	}
+	// Straight to the terminal rather than into the frame: the frame is parsed
+	// into cells, and a sequence that draws nothing does not survive it.
+	return tea.Raw(b.String())
 }
 
 // syncTitle keeps the title the view will ask for in step with what is
@@ -652,8 +731,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case sessionsMsg:
-		m.readAgents(msg)
-		return m.applySessions(msg)
+		notify := m.readAgents(msg)
+		return tea.Batch(notify, m.applySessions(msg))
 
 	case errMsg:
 		m.setStatus(msg.err.Error(), true)

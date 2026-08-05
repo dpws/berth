@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/dpws/berth/internal/agent"
 	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/term"
 	"github.com/dpws/berth/internal/tmux"
@@ -1118,5 +1119,129 @@ func TestShiftedCharactersAreTypedThrough(t *testing.T) {
 		if _, ok := typedText(tc.key); ok {
 			t.Errorf("%s was treated as plain typing", tc.name)
 		}
+	}
+}
+
+// notifyStrings runs a reading through the model and returns what it would send
+// the terminal, if anything.
+func notifyStrings(t *testing.T, m *Model, infos map[string]agent.Info) string {
+	t.Helper()
+	cmd := m.notifyFor(infos)
+	m.agents = infos
+	if cmd == nil {
+		return ""
+	}
+	msg, ok := cmd().(tea.RawMsg)
+	if !ok {
+		t.Fatalf("notify sent %T, want a raw sequence", cmd())
+	}
+	return fmt.Sprint(msg.Msg)
+}
+
+// Notifying is about the moment a session changes, so berth has to know what it
+// was doing before. The first reading is where it learns that - announcing it
+// would ring for news that is hours old every time berth starts.
+func TestNotifyOnlyOnAChange(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Notify = config.NotifyBoth
+	m.cfg.NotifyOn = []string{config.NotifyWaiting, config.NotifyIdle}
+
+	first := map[string]agent.Info{
+		"api": {Status: agent.Busy},
+		"web": {Status: agent.Busy},
+	}
+	if got := notifyStrings(t, m, first); got != "" {
+		t.Errorf("the first reading said %q, want nothing", got)
+	}
+	// Still waiting, still working: nothing has changed, so nothing is said.
+	if got := notifyStrings(t, m, first); got != "" {
+		t.Errorf("an unchanged reading said %q, want nothing", got)
+	}
+
+	got := notifyStrings(t, m, map[string]agent.Info{
+		"api": {Status: agent.Idle},    // answered, and now finished
+		"web": {Status: agent.Waiting}, // has come to a question
+	})
+	if !strings.Contains(got, "web is waiting on you") {
+		t.Errorf("said %q, want the session that came to a question", got)
+	}
+	if !strings.Contains(got, "api has finished") {
+		t.Errorf("said %q, want the session that finished", got)
+	}
+	// One ring for the pair of them: a terminal cannot ring twice as loudly.
+	// The ring leads, and is the only bare bell - OSC 9 ends in one of its own,
+	// which is a string terminator rather than a sound.
+	if !strings.HasPrefix(got, "\a") || strings.Contains(strings.TrimPrefix(got, "\a"), "\a\a") {
+		t.Errorf("said %q, want exactly one ring, leading", got)
+	}
+}
+
+// Only work turning into idle is a turn that finished. A session berth has just
+// started following, or one going back to the prompt after a question, has not.
+func TestFinishedMeansWorkThatStopped(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Notify = config.NotifyBell
+	m.cfg.NotifyOn = []string{config.NotifyIdle}
+
+	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Waiting}})
+	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Idle}}); got != "" {
+		t.Errorf("waiting to idle said %q, want nothing - no turn ended there", got)
+	}
+	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Busy}})
+	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Idle}}); got == "" {
+		t.Error("work turning into idle said nothing, want a notification")
+	}
+}
+
+// The two halves are separate: a bell is a sequence that draws nothing, a
+// desktop notification carries the name of the session.
+func TestNotifyHonoursHowAndWhen(t *testing.T) {
+	waiting := map[string]agent.Info{"api": {Status: agent.Waiting}}
+	start := map[string]agent.Info{"api": {Status: agent.Busy}}
+
+	cases := []struct {
+		how       string
+		on        []string
+		wantBell  bool
+		wantWords bool
+	}{
+		{config.NotifyOff, []string{config.NotifyWaiting}, false, false},
+		{config.NotifyBell, []string{config.NotifyWaiting}, true, false},
+		{config.NotifyDesktop, []string{config.NotifyWaiting}, false, true},
+		{config.NotifyBoth, []string{config.NotifyWaiting}, true, true},
+		// Asked about, but not about this moment.
+		{config.NotifyBoth, []string{config.NotifyIdle}, false, false},
+		{config.NotifyBoth, nil, false, false},
+	}
+	for _, c := range cases {
+		m := newTestModel()
+		m.cfg.Notify, m.cfg.NotifyOn = c.how, c.on
+		notifyStrings(t, m, start)
+		got := notifyStrings(t, m, waiting)
+		if strings.HasPrefix(got, "\a") != c.wantBell {
+			t.Errorf("notify=%q on=%v: bell in %q, want %v", c.how, c.on, got, c.wantBell)
+		}
+		if strings.Contains(got, "api is waiting on you") != c.wantWords {
+			t.Errorf("notify=%q on=%v: words in %q, want %v", c.how, c.on, got, c.wantWords)
+		}
+	}
+}
+
+// A session that has gone takes its history with it, so a name used again later
+// is not compared against a session that no longer exists.
+func TestNotifyForgetsSessionsThatEnd(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Notify = config.NotifyBell
+	m.cfg.NotifyOn = []string{config.NotifyWaiting}
+
+	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Busy}})
+	notifyStrings(t, m, map[string]agent.Info{}) // api is killed
+	if _, ok := m.seen["api"]; ok {
+		t.Error("a session that ended was still remembered")
+	}
+	// A new session of the same name starts over: its first reading teaches
+	// berth where it stands rather than announcing it.
+	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Waiting}}); got != "" {
+		t.Errorf("a session seen for the first time said %q, want nothing", got)
 	}
 }

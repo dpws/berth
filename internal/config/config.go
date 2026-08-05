@@ -84,6 +84,14 @@ type Config struct {
 	// a session list first, and most of the time the machine is not the thing
 	// in question.
 	ShowHost bool `json:"show_host"`
+	// Notify is how berth gets your attention when a session reaches one of
+	// the moments in NotifyOn: "bell" rings the terminal, "desktop" asks it to
+	// raise a real notification, "both" does the two, "off" neither.
+	Notify string `json:"notify"`
+	// NotifyOn is which moments are worth it: "waiting" for a session blocked
+	// on you, "idle" for one that has just finished. Empty means none, which
+	// is another way of saying off.
+	NotifyOn []string `json:"notify_on"`
 	// CheckUpdates asks GitHub once a day whether there is a newer release and
 	// says so in the header. It is the only request berth makes on its own;
 	// nothing is sent but the ask, and nothing is ever installed without
@@ -146,6 +154,12 @@ func Default() Config {
 		CheckUpdates:        true,
 		UsageRefreshSeconds: 30,
 		GitRefreshSeconds:   5,
+
+		// Off, like everything that interrupts you. Turned on, the default is
+		// the moment that is actually blocking - a session that has finished
+		// is not waiting for anything.
+		Notify:   NotifyOff,
+		NotifyOn: []string{NotifyWaiting},
 	}
 }
 
@@ -238,8 +252,46 @@ func (c Config) Save() error {
 // QuitKey is deliberately absent: Load starts from Default and unmarshals over
 // it, so a file that omits the key keeps the default, while one that sets it
 // to "" turns the key off. Filling it in here would make it undisablable.
+// The ways berth can get your attention, and the moments worth doing it at.
+const (
+	NotifyOff     = "off"
+	NotifyBell    = "bell"
+	NotifyDesktop = "desktop"
+	NotifyBoth    = "both"
+
+	NotifyWaiting = "waiting"
+	NotifyIdle    = "idle"
+)
+
+// Rings reports whether the terminal should be rung.
+func (c Config) Rings() bool { return c.Notify == NotifyBell || c.Notify == NotifyBoth }
+
+// Raises reports whether the terminal should be asked for a desktop
+// notification.
+func (c Config) Raises() bool { return c.Notify == NotifyDesktop || c.Notify == NotifyBoth }
+
+// NotifiesOn reports whether a moment is one berth was asked about.
+func (c Config) NotifiesOn(moment string) bool {
+	if c.Notify == NotifyOff {
+		return false
+	}
+	for _, m := range c.NotifyOn {
+		if m == moment {
+			return true
+		}
+	}
+	return false
+}
+
 func (c Config) withDefaults() Config {
 	d := Default()
+	// A way of being told that berth does not know is no way at all, and
+	// silently doing nothing is better than a config typo ringing all day.
+	switch c.Notify {
+	case NotifyOff, NotifyBell, NotifyDesktop, NotifyBoth:
+	default:
+		c.Notify = NotifyOff
+	}
 	if c.ClaudeCommand == "" {
 		c.ClaudeCommand = d.ClaudeCommand
 	}

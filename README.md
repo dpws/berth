@@ -613,6 +613,13 @@ only refresh while a Claude session is running, so a reading older than twenty
 minutes is labelled `as of 14:05` rather than passed off as live — with the day
 named too (`as of Aug 2 14:05`) once it is no longer today's.
 
+**Only Claude gets that line.** Its status line runs on every turn, so a
+reading that has gone quiet really does mean nothing has run in a while. Codex
+writes its rollout only while it is running, so a Codex reading is stale within
+twenty minutes of a turn ending and the note was on screen more or less
+permanently — furniture rather than news. What it was there to qualify has
+moved onto the rows below.
+
 **How long each window has left rides on its own row, after the percentage** —
 `28%  2h 5m`, `61% 2d 13h`. Per window, because a block metering two of them
 has to say which one it means: the soonest boundary is rarely the one you are
@@ -630,7 +637,9 @@ to say what the next one is.
 
 The times share a column of their own, so the percentages stay in line with
 each other. On a narrow sidebar the meter goes first and the times outlast it:
-a bar is a picture of a number that is already on the row.
+a bar is a picture of a number that is already on the row. For Codex this is
+the whole block — meters, and what each window has left, with nothing
+underneath.
 
 **What berth will not do.** Claude Code's `/usage` reaches an internal endpoint
 with the Claude Code login token. Driving that from another program is

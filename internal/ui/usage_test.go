@@ -132,10 +132,10 @@ func TestUsageBlockRespectsItsBudget(t *testing.T) {
 func TestTightBudgetKeepsTheNoteOverTheLastMeter(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessionsMsg([]tmux.Session{
-		{Name: "work", Kind: tmux.KindCodex, Managed: true},
+		{Name: "work", Kind: tmux.KindClaude, Managed: true},
 	}))
 	m.usage = map[string]usage.Limits{
-		tmux.KindCodex: {Kind: tmux.KindCodex, Sampled: time.Now().Add(-3 * time.Hour),
+		tmux.KindClaude: {Kind: tmux.KindClaude, Sampled: time.Now().Add(-3 * time.Hour),
 			Windows: []usage.Window{{Label: "5h", Percent: 28}, {Label: "week", Percent: 61}}},
 	}
 
@@ -181,8 +181,28 @@ func TestTimeLeftShowsAlongsideAStaleReading(t *testing.T) {
 	if strings.Contains(block, "resets ") {
 		t.Errorf("block = %q, want no separate resets line", block)
 	}
+	// And no age either. Codex is stale nearly all the time, so the note was
+	// permanent furniture; what it qualified is on the rows now.
+	if strings.Contains(block, "as of ") {
+		t.Errorf("block = %q, want no age under a Codex block", block)
+	}
+}
+
+// Claude keeps it. Its numbers come from a status line that runs every turn, so
+// one that has gone quiet says something a standing caveat would not.
+func TestClaudeStillSaysHowOldTheReadingIs(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "api", Kind: tmux.KindClaude, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindClaude: {Kind: tmux.KindClaude, Sampled: time.Now().Add(-6 * time.Hour),
+			Windows: []usage.Window{{Label: "5h", Percent: 15}}},
+	}
+
+	block := ansi.Strip(strings.Join(m.usageBlock(28, 10), "\n"))
 	if !strings.Contains(block, "as of ") {
-		t.Errorf("block = %q, want the age still shown", block)
+		t.Errorf("block = %q, want the age shown", block)
 	}
 }
 

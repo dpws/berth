@@ -132,7 +132,7 @@ func usageRows(l usage.Limits, kind string, w int) (rows []string, notes []strin
 	for _, win := range l.Windows {
 		rows = append(rows, usageRow(win, kind, w, labelW, resetW, now))
 	}
-	return rows, usageNotes(l, w, now)
+	return rows, usageNotes(l, kind, w, now)
 }
 
 // usageRow lays out one window as: label, meter, value, and how long the window
@@ -271,7 +271,21 @@ func usageBar(percent float64, kind string, width int) string {
 // reading is. When a window rolls over is on the window's own row now, where it
 // belongs - a block metering two of them had to pick one to report, and it
 // picked the soonest, which is not the same as the one you are up against.
-func usageNotes(l usage.Limits, w int, now time.Time) []string {
+//
+// Codex does not get one. It writes its rollout only while it is running, so a
+// reading is older than twenty minutes within twenty minutes of a turn ending
+// and the note was on screen more or less permanently - furniture, not news.
+// What it was there to qualify has moved onto the rows: each window counts
+// itself down from a fixed moment the agent was told about, which stays right
+// however old the percentage beside it is.
+//
+// Claude keeps it. Its numbers come from a status line that runs on every turn,
+// so a reading that has gone quiet really does mean nothing has run in a while,
+// and that is worth saying rather than a standing caveat on everything.
+func usageNotes(l usage.Limits, kind string, w int, now time.Time) []string {
+	if kind == tmux.KindCodex {
+		return nil
+	}
 	// Numbers only arrive while an agent is running, so old ones say when they
 	// were taken rather than pretending to be current.
 	if l.Sampled.IsZero() || now.Sub(l.Sampled) <= usageStaleAfter {

@@ -49,11 +49,6 @@ func barWidthFor(w, labelW, resetW int) int {
 // usageMinRows is the smallest block worth drawing: a divider plus one line.
 const usageMinRows = 2
 
-// usageStaleAfter is how long a reading is presented as current. Both agents
-// only report while they are running, so a quiet hour leaves the last numbers
-// standing; saying when they were taken is better than implying they are live.
-const usageStaleAfter = 20 * time.Minute
-
 // usageBlock renders the selected session's rate limits as w-wide lines,
 // including the divider above them. It returns nil when there is nothing to
 // show or fewer than budget rows to show it in.
@@ -73,28 +68,14 @@ func (m *Model) usageBlock(w, budget int) []string {
 	if !ok {
 		return nil // not read yet
 	}
-	rows, notes := usageRows(limits, kind, w)
-	if len(rows) == 0 && len(notes) == 0 {
+	rows := usageRows(limits, kind, w)
+	if len(rows) == 0 {
 		return nil
 	}
 	// The divider costs a row, so the block can only be as tall as its budget.
-	// The notes are what the meters do not say - when the window rolls over,
-	// and how old the reading is - so they outrank the last meters when there
-	// is not room for both. Never the only meter, though: a note over nothing
-	// says less than a figure with no date on it.
-	room := budget - 1
-	keep := len(rows)
-	if len(rows)+len(notes) > room {
-		keep = min(len(rows), max(1, room-len(notes)))
-	}
-	rows = rows[:keep:keep]
-	for _, note := range notes {
-		if len(rows) >= room {
-			break
-		}
-		rows = append(rows, note)
-	}
-	if len(rows) > room {
+	// Every row is a window now, and they are cut from the bottom: the first is
+	// the plainest, and on a plan with both it is the one you run into first.
+	if room := budget - 1; len(rows) > room {
 		rows = rows[:room]
 	}
 
@@ -103,15 +84,14 @@ func (m *Model) usageBlock(w, budget int) []string {
 	return append(out, rows...)
 }
 
-// usageRows renders the body of the block, without the divider. The notes come
-// back apart from the meters because they are the last rows and so the first
-// the budget would cut, and they are worth more than the meters they displace.
-func usageRows(l usage.Limits, kind string, w int) (rows []string, notes []string) {
+// usageRows renders the body of the block, without the divider: one row per
+// window, or the one line saying why there are none.
+func usageRows(l usage.Limits, kind string, w int) []string {
 	if l.Empty() {
 		if l.Err == nil {
-			return nil, nil
+			return nil
 		}
-		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}, nil
+		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}
 	}
 
 	// One label column for the block, as wide as its widest row needs.
@@ -128,11 +108,11 @@ func usageRows(l usage.Limits, kind string, w int) (rows []string, notes []strin
 	now := time.Now()
 	resetW := resetWidth(l, now)
 
-	rows = make([]string, 0, len(l.Windows)+1)
+	rows := make([]string, 0, len(l.Windows))
 	for _, win := range l.Windows {
 		rows = append(rows, usageRow(win, kind, w, labelW, resetW, now))
 	}
-	return rows, usageNotes(l, kind, w, now)
+	return rows
 }
 
 // usageRow lays out one window as: label, meter, value, and how long the window
@@ -265,52 +245,4 @@ func usageBar(percent float64, kind string, width int) string {
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(strings.Repeat("▓", filled)) +
 		faintStyle.Render(strings.Repeat("░", width-filled))
-}
-
-// usageNotes are the lines under the meters. Only one is left: how old the
-// reading is. When a window rolls over is on the window's own row now, where it
-// belongs - a block metering two of them had to pick one to report, and it
-// picked the soonest, which is not the same as the one you are up against.
-//
-// Codex does not get one. It writes its rollout only while it is running, so a
-// reading is older than twenty minutes within twenty minutes of a turn ending
-// and the note was on screen more or less permanently - furniture, not news.
-// What it was there to qualify has moved onto the rows: each window counts
-// itself down from a fixed moment the agent was told about, which stays right
-// however old the percentage beside it is.
-//
-// Claude keeps it. Its numbers come from a status line that runs on every turn,
-// so a reading that has gone quiet really does mean nothing has run in a while,
-// and that is worth saying rather than a standing caveat on everything.
-func usageNotes(l usage.Limits, kind string, w int, now time.Time) []string {
-	if kind == tmux.KindCodex {
-		return nil
-	}
-	// Numbers only arrive while an agent is running, so old ones say when they
-	// were taken rather than pretending to be current.
-	if l.Sampled.IsZero() || now.Sub(l.Sampled) <= usageStaleAfter {
-		return nil
-	}
-	return []string{" " + faintStyle.Render(
-		truncate("as of "+dayTime(l.Sampled, now), max(1, w-1)))}
-}
-
-// dayTime writes a moment as a clock time, naming the day when it is not
-// today. Both sides of the block need that. A reading easily is not from today:
-// Codex meters some models separately and berth keeps the last word on every
-// bucket, so the age of the block is the age of whichever one has gone longest
-// untouched - days, for a model tried once. A reset easily is not either: a
-// weekly window rolls over up to seven days out, and "resets 10:15" for
-// something three days away is worse than saying nothing.
-//
-// Codex stamps its rollouts in UTC and gives reset times as unix seconds, so
-// either is moved into the zone the clock on the wall is in before the day or
-// the time is read off it.
-func dayTime(at, now time.Time) string {
-	const day = "2006-01-02"
-	at = at.In(now.Location())
-	if at.Format(day) == now.Format(day) {
-		return at.Format("15:04")
-	}
-	return at.Format("Jan 2 15:04")
 }

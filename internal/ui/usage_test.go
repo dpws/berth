@@ -127,34 +127,11 @@ func TestUsageBlockRespectsItsBudget(t *testing.T) {
 	}
 }
 
-// The note is the last row and so the first a tight budget would cut - but it
-// is the row saying the numbers are old, which beats the meter it displaces.
-func TestTightBudgetKeepsTheNoteOverTheLastMeter(t *testing.T) {
-	m := newTestModel()
-	m.Update(sessionsMsg([]tmux.Session{
-		{Name: "work", Kind: tmux.KindClaude, Managed: true},
-	}))
-	m.usage = map[string]usage.Limits{
-		tmux.KindClaude: {Kind: tmux.KindClaude, Sampled: time.Now().Add(-3 * time.Hour),
-			Windows: []usage.Window{{Label: "5h", Percent: 28}, {Label: "week", Percent: 61}}},
-	}
-
-	// Divider, one meter, the note.
-	got := m.usageBlock(28, 3)
-	if len(got) != 3 || !strings.Contains(ansi.Strip(got[2]), "as of") {
-		t.Errorf("block = %q, want the note in place of the second meter", ansi.Strip(strings.Join(got, "|")))
-	}
-	// With room for only one row under the rule, a figure beats a bare date.
-	got = m.usageBlock(28, 2)
-	if len(got) != 2 || !strings.Contains(ansi.Strip(got[1]), "28%") {
-		t.Errorf("block = %q, want the meter", ansi.Strip(strings.Join(got, "|")))
-	}
-}
-
 // A reading goes stale as soon as the agent stops running, which for Codex is
 // most of the time. The time left is worked out from a fixed moment the agent
 // was told about, so it is still right then - and that is exactly when you want
-// it.
+// it. Nothing under the meters says how old the numbers are any more: for
+// Codex that line was on screen permanently and for Claude almost never.
 func TestTimeLeftShowsAlongsideAStaleReading(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessionsMsg([]tmux.Session{
@@ -181,28 +158,8 @@ func TestTimeLeftShowsAlongsideAStaleReading(t *testing.T) {
 	if strings.Contains(block, "resets ") {
 		t.Errorf("block = %q, want no separate resets line", block)
 	}
-	// And no age either. Codex is stale nearly all the time, so the note was
-	// permanent furniture; what it qualified is on the rows now.
 	if strings.Contains(block, "as of ") {
-		t.Errorf("block = %q, want no age under a Codex block", block)
-	}
-}
-
-// Claude keeps it. Its numbers come from a status line that runs every turn, so
-// one that has gone quiet says something a standing caveat would not.
-func TestClaudeStillSaysHowOldTheReadingIs(t *testing.T) {
-	m := newTestModel()
-	m.Update(sessionsMsg([]tmux.Session{
-		{Name: "api", Kind: tmux.KindClaude, Managed: true},
-	}))
-	m.usage = map[string]usage.Limits{
-		tmux.KindClaude: {Kind: tmux.KindClaude, Sampled: time.Now().Add(-6 * time.Hour),
-			Windows: []usage.Window{{Label: "5h", Percent: 15}}},
-	}
-
-	block := ansi.Strip(strings.Join(m.usageBlock(28, 10), "\n"))
-	if !strings.Contains(block, "as of ") {
-		t.Errorf("block = %q, want the age shown", block)
+		t.Errorf("block = %q, want no age under the meters", block)
 	}
 }
 
@@ -647,40 +604,5 @@ func TestWindowTitleHasNoTallyWithoutAgentStatus(t *testing.T) {
 	m.readAgents(m.sessions)
 	if got := m.windowTitle(); got != "api (claude) — berth" {
 		t.Errorf("title = %q, want no tally when the agents are not watched", got)
-	}
-}
-
-// Codex keeps the last word on every limit bucket, so a stale block can be
-// days old. "as of 14:22" alone would read as this afternoon.
-func TestStaleNoteNamesTheDayWhenItIsNotToday(t *testing.T) {
-	now := time.Date(2026, 8, 3, 22, 40, 0, 0, time.UTC)
-	if got := dayTime(now.Add(-2*time.Hour), now); got != "20:40" {
-		t.Errorf("dayTime(today) = %q, want the clock time alone", got)
-	}
-	if got := dayTime(now.Add(-3*24*time.Hour), now); got != "Jul 31 22:40" {
-		t.Errorf("dayTime(3 days ago) = %q, want the day named", got)
-	}
-	// Just before midnight is still another day, not "seven hours ago".
-	if got := dayTime(now.Add(-23*time.Hour), now); got != "Aug 2 23:40" {
-		t.Errorf("dayTime(yesterday) = %q, want the day named", got)
-	}
-}
-
-// Codex stamps its rollouts in UTC. Reading the day and the time straight off
-// that put the note hours - and often a day - away from the clock on the wall.
-func TestStaleNoteIsInTheReadersOwnZone(t *testing.T) {
-	la, err := time.LoadLocation("America/Los_Angeles")
-	if err != nil {
-		t.Skipf("no zone database: %v", err)
-	}
-	now := time.Date(2026, 8, 4, 6, 0, 0, 0, time.UTC).In(la) // 23:00 on Aug 3 in LA
-	// Tomorrow by the stamp, still this evening on the reader's clock.
-	at := time.Date(2026, 8, 4, 4, 30, 0, 0, time.UTC)
-	if got := dayTime(at, now); got != "21:30" {
-		t.Errorf("dayTime(this evening) = %q, want the local clock time alone", got)
-	}
-	// And a day back is a day back in the same zone, not in UTC's.
-	if got := dayTime(at.Add(-24*time.Hour), now); got != "Aug 2 21:30" {
-		t.Errorf("dayTime(yesterday evening) = %q, want the local day and time", got)
 	}
 }

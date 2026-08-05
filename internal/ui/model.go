@@ -171,9 +171,6 @@ type Model struct {
 	// button comes up berth does not know whether it was a click for the
 	// session or the start of a selection.
 	pressed tea.MouseMsg
-	// clipboard is a copy waiting to be handed to the terminal on the next
-	// frame, as an OSC 52 sequence.
-	clipboard string
 
 	// presets are the saved session shapes, kept in their own file next to the
 	// config.
@@ -937,10 +934,15 @@ func (m *Model) copySelection() tea.Cmd {
 	}
 	// OSC 52 hands the text to whatever terminal berth is talking to, which
 	// over SSH is the one in front of you rather than the remote machine.
-	m.clipboard = ansi.SetSystemClipboard(text)
+	//
+	// It goes out as a command rather than riding along with the frame. The
+	// frame is no longer a string the terminal receives: it is parsed into
+	// cells and those are drawn, so a sequence that produces no cells is
+	// dropped on the way - silently, since nothing about a copy that failed
+	// looks different from one that worked.
 	lines := strings.Count(text, "\n") + 1
 	m.setStatus(fmt.Sprintf("copied %d %s", lines, plural(lines, "line", "lines")), false)
-	return nil
+	return tea.SetClipboard(text)
 }
 
 // selection is the range to draw highlighted, if any.
@@ -1801,12 +1803,6 @@ func (m *Model) screen() string {
 	gap := strings.Repeat(" ", gutter)
 
 	var b strings.Builder
-	// A pending copy rides out with this frame. OSC 52 draws nothing, so it is
-	// safe ahead of the rest, and clearing it here means it is sent once.
-	if m.clipboard != "" {
-		b.WriteString(m.clipboard)
-		m.clipboard = ""
-	}
 	// The bar above the body is split at the same column the body is, so its
 	// two halves sit over the list and over the session they describe.
 	if m.topBarHeight() > 0 {

@@ -134,11 +134,20 @@ A drag selects; a plain click still goes through to the program in the session,
 so agents keep their own mouse handling. The highlight clears when you type or
 change session.
 
-If the copy does not arrive, your terminal is refusing OSC 52 — most support
-it, some ask you to turn it on (kitty's `clipboard_control`, xterm's
-`allowWindowOps`, iTerm2's "applications may access the clipboard"). Failing
-that, **`m`** hands the mouse back to the terminal entirely, at the cost of
-clicking rows until you press it again; `"mouse": false` starts that way.
+If the copy does not arrive, something between berth and the clipboard is
+refusing OSC 52. Two things can be, and `berth doctor` names whichever it is.
+**Your terminal**: most accept it, some ask you to turn it on (kitty's
+`clipboard_control`, xterm's `allowWindowOps`, iTerm2's "applications may
+access the clipboard"). **tmux, if you started berth inside it**: on the
+default `set-clipboard external` tmux will set the clipboard for its own copies
+and drop an application's, so nothing arrives —
+
+```sh
+tmux set -g set-clipboard on
+```
+
+Failing both, **`m`** hands the mouse back to the terminal entirely, at the cost
+of clicking rows until you press it again; `"mouse": false` starts that way.
 
 ## Config
 
@@ -452,7 +461,8 @@ berth doctor --fix    # apply the ones berth can
 ```
 
 It checks tmux (whether modified keys are passed on, focus is reported, the
-mouse is taken, colour is capped, how long escape waits), the terminal (whether
+mouse is taken, colour is capped, how long escape waits, and — when berth is
+running inside tmux — whether a copy is passed on), the terminal (whether
 it can tell shift+enter from enter, and whether it accepts a copy over OSC 52),
 and the agents (whether Claude Code is pointed at berth's status line).
 

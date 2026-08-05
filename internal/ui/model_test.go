@@ -502,6 +502,57 @@ func TestDragOverTheSessionSelects(t *testing.T) {
 	}
 }
 
+// The copy has to leave as a command. A frame is no longer a string the
+// terminal receives - it is parsed into cells, and those are drawn - so an OSC
+// 52 written into the view is dropped on the way out, silently, since a copy
+// that never happened looks exactly like one that did.
+func TestCopyingSelectionLeavesAsACommand(t *testing.T) {
+	m := newTestModel()
+	m.Update(sessions("alpha"))
+	withPane(t, m)
+
+	const marker = "berth-copy-marker"
+	m.pane.SendText("echo " + marker + "\n")
+	row := -1
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && row < 0 {
+		for i, line := range m.pane.Render(false, nil) {
+			// The echoed command counts: what matters is that the row berth
+			// selects has known text on it.
+			if strings.Contains(ansi.Strip(line), marker) {
+				row = i
+				break
+			}
+		}
+		if row < 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if row < 0 {
+		t.Skip("the shell never echoed the marker")
+	}
+
+	sel := term.Selection{AnchorX: 0, AnchorY: row, CursorX: 39, CursorY: row}
+	m.sel = &sel
+	text := m.pane.SelectedText(sel)
+	if !strings.Contains(text, marker) {
+		t.Fatalf("selected %q, want the marker row", text)
+	}
+
+	cmd := m.copySelection()
+	if cmd == nil {
+		t.Fatal("copying produced no command")
+	}
+	if got, want := cmd(), tea.SetClipboard(text)(); got != want {
+		t.Errorf("command sent %#v, want the clipboard set to the selection", got)
+	}
+
+	// And the frame must not be carrying it: that route does not arrive.
+	if body := m.View().Content; strings.Contains(body, "\x1b]52") {
+		t.Error("the view is still carrying an OSC 52 sequence")
+	}
+}
+
 // A click is not a drag, and still belongs to the program in the session.
 func TestClickOverTheSessionIsNotASelection(t *testing.T) {
 	m := newTestModel()

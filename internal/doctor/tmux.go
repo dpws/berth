@@ -258,3 +258,54 @@ func tmuxEscapeTime() Finding {
 	f.Summary = fmt.Sprintf("tmux sits on escape for %dms", ms)
 	return f
 }
+
+// tmuxSetClipboard asks whether a copy can get out of berth at all when berth
+// is itself running inside tmux.
+//
+// A dragged selection is handed to berth's own terminal with OSC 52, which is
+// what makes copying work over SSH. Started in an ordinary terminal, that is
+// the terminal and nothing is in the way. Started inside a tmux pane - which is
+// where someone who lives in tmux tends to start things - tmux is in the way,
+// and on the default "external" it ignores an application's sequence: it will
+// set the outer clipboard for its own copies and drop everyone else's. The copy
+// then goes nowhere, with nothing on screen to say so, which is the same
+// silence the terminal check is about one layer further out.
+func tmuxSetClipboard() Finding {
+	f := Finding{
+		Key: "tmux_set_clipboard", Subject: Tmux,
+		Summary: "tmux passes a copy on",
+		Detail: "berth hands a dragged selection to its terminal with OSC 52. Running " +
+			"inside tmux, that goes to tmux first, and on anything but \"on\" tmux " +
+			"drops it - so copying appears to work and the clipboard never changes.",
+		Command: "tmux set -g set-clipboard on",
+		fix:     setTmuxOption("-g", "set-clipboard on"),
+	}
+	if !have("tmux") {
+		f.Severity = Unknown
+		return f
+	}
+	// Only the tmux berth is inside can swallow this. The sessions berth drives
+	// are downstream of it: they receive what berth writes and never carry a
+	// copy back out.
+	if !inTmux() {
+		f.Severity = OK
+		f.Summary = "berth writes to the terminal directly, so this does not apply"
+		f.Detail = "tmux can only drop a copy on its way out through a client. berth is " +
+			"not running inside tmux here, so a selection goes straight to your " +
+			"terminal."
+		return f
+	}
+	v, err := tmuxOption("-g", "set-clipboard")
+	if err != nil {
+		f.Severity = Unknown
+		return f
+	}
+	if v == "on" {
+		f.Severity = OK
+		return f
+	}
+	// Copying does not half work here; it does not work.
+	f.Severity = Broken
+	f.Summary = "tmux is swallowing copies (set-clipboard " + v + ")"
+	return f
+}

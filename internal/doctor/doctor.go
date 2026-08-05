@@ -116,6 +116,7 @@ func Run() []Finding {
 		tmuxMouse,
 		tmuxTrueColor,
 		tmuxEscapeTime,
+		tmuxSetClipboard,
 		terminalKeyboard,
 		terminalClipboard,
 		claudeStatusline,

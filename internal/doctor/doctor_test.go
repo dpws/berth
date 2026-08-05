@@ -141,3 +141,21 @@ func TestAnUnknownTerminalIsNotCalledFine(t *testing.T) {
 		t.Errorf("the report does not offer the key that always works: %q", f.Detail)
 	}
 }
+
+// Outside tmux nothing sits between berth and the terminal, so set-clipboard is
+// not the reason a copy failed. Reporting it would send someone to change a
+// setting that was never in the way - the same trap the extended-keys check
+// avoids.
+func TestTheClipboardCheckOnlyAppliesInsideTmux(t *testing.T) {
+	if !have("tmux") {
+		t.Skip("tmux not on PATH")
+	}
+	t.Setenv("TMUX", "")
+	f := tmuxSetClipboard()
+	if f.Severity != OK {
+		t.Errorf("outside tmux the check reported %s: %q", f.Severity, f.Summary)
+	}
+	if f.Detail == "" {
+		t.Error("the finding says nothing about why it does not apply")
+	}
+}

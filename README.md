@@ -20,7 +20,7 @@ again, still running when you come back.
 │  ? web    codex  │                                     │
 │  ○ dots   bash   │ (live - type straight into it)      │
 │──────────────────│                                     │
-│ 5h  ▓▓▓░░░  28%  │                                     │
+│ 5h ▓▓▓░░░░░░  28%│                                     │
 └──────────────────┴─────────────────────────────────────┘
  ctrl+o back to the list · ctrl+x quit  ·  everything else typed goes to api
 ```
@@ -559,8 +559,8 @@ rate limit is gone:
 │  ● api            claude │
 │  ○ web            codex  │
 │──────────────────────────│
-│ 5h   ▓▓░░░░░   28%  2h 5m│
-│ week ▓▓▓▓░░░   61% 2d 13h│
+│ 5h   ▓▓░░░░░░  28%  2h 5m│
+│ week ▓▓▓▓▓░░░  61% 2d 13h│
 │──────────────────────────│
 │ n new  x kill            │
 └──────────────────────────┴─────────────────────────
@@ -649,11 +649,18 @@ not from anything berth is measuring. A boundary already behind us shows
 nothing — that window has rolled over, and the agent has simply not run since
 to say what the next one is.
 
-The times share a column of their own, so the percentages stay in line with
-each other. On a narrow sidebar the meter goes first and the times outlast it:
-a bar is a picture of a number that is already on the row. That is the whole
-block for either agent: meters, and what each window has left, with nothing
-underneath.
+**The percentage sits against its meter**, not out at the edge — a number a
+hand's width from the bar it describes reads as a third thing on the row rather
+than the same fact twice — and the times keep the right edge, in a column of
+their own so they stay in line with each other. Every meter berth draws shares
+those columns, the machine's below as well as the plan's, so the sidebar reads
+as one column of figures rather than two blocks that nearly agree.
+
+On a narrow sidebar the meter goes first and the figures outlast it: a bar is a
+picture of a number that is already on the row. With no bar to sit against, the
+percentage joins the times on the right rather than trailing its label across an
+empty row. That is the whole block for either agent: meters, and what each
+window has left, with nothing underneath.
 
 **What berth will not do.** Claude Code's `/usage` reaches an internal endpoint
 with the Claude Code login token. Driving that from another program is
@@ -677,19 +684,20 @@ limits, in the same shape, for the box berth is running on:
 
 ```
 │────────────────────────────│
-│ 5h   ▓░░░░░░░░    8% 2h 57m│
-│ week ▓▓▓▓▓▓▓▓░   88% 2d 12h│
+│ 5h   ▓░░░░░░░░░   8% 2h 57m│
+│ week ▓▓▓▓▓▓▓▓▓░  88% 2d 12h│
 │────────────────────────────│
-│ cpu  ▓▓▓▓▓▓▓░░░░   67% 2.69│
-│ mem  ▓▓▓▓▓▓░░░░░   55% 7.1G│
-│ disk ▓░░░░░░░░░░    8% 406G│
+│ cpu  ▓▓▓▓▓▓▓░░░  67%   2.69│
+│ mem  ▓▓▓▓▓▓░░░░  55%   7.1G│
+│ disk ▓░░░░░░░░░   8%   406G│
 │────────────────────────────│
 ```
 
-It reads the same way as the rate limits above it: the bar and the percentage
-are what is **gone**, and the figure on the right is what is **left** — memory
-and disk free, and for `cpu` the load average the percentage was worked out
-from. Anything past 90% turns red.
+It reads the same way as the rate limits above it, and is drawn to the same
+columns: the bar and the percentage against it are what is **gone**, and the
+figure on the right is what is **left** — memory and disk free, and for `cpu`
+the load average the percentage was worked out from. Anything past 90% turns
+red.
 
 `cpu` is the one-minute load average divided by the number of processors, so
 100% means they are all busy and it can go past that — load counts what is

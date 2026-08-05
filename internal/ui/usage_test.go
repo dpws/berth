@@ -38,22 +38,82 @@ func TestUsageBarClamps(t *testing.T) {
 // The meter grows with the sidebar instead of sitting at a fixed six cells,
 // and gives up rather than crowding out the number.
 func TestBarWidthFollowsTheSidebar(t *testing.T) {
+	lay := meterLayout{label: 4, pct: 4}
 	cases := map[int]int{
 		12:  0, // no room for a meter at all
 		16:  0, // still below the minimum worth drawing
-		18:  barMin,
-		28:  16,
+		17:  barMin,
+		28:  17,
 		40:  barMax, // capped, not a ruler
 		200: barMax,
 	}
 	for w, want := range cases {
-		if got := barWidthFor(w, 4, 0); got != want {
+		if got := barWidthFor(w, lay); got != want {
 			t.Errorf("barWidthFor(%d) = %d, want %d", w, got, want)
 		}
 	}
-	// A wider label leaves the meter less room, not the row more width.
-	if barWidthFor(28, 9, 0) >= barWidthFor(28, 4, 0) {
+	// A wider label, or a column of figures on the right, leaves the meter less
+	// room - not the row more width.
+	if barWidthFor(28, meterLayout{label: 9, pct: 4}) >= barWidthFor(28, lay) {
 		t.Error("a longer label did not take room from the meter")
+	}
+	if barWidthFor(28, meterLayout{label: 4, pct: 4, tail: 6}) >= barWidthFor(28, lay) {
+		t.Error("a right-hand column did not take room from the meter")
+	}
+}
+
+// The percentage belongs to the meter, so its column sits against the meter
+// rather than out at the right edge beside a figure that is a different fact.
+// The number is right-aligned inside that column, so the digits still line up
+// down the block - 8% and 88% are read against each other as often as against
+// their own bars.
+func TestPercentageSitsAgainstTheBar(t *testing.T) {
+	lay := meterLayout{label: 4, pct: 4, tail: 6, bar: 10}
+	for _, percent := range []float64{8, 88, 100} {
+		got := ansi.Strip(meterRow("5h", percent, tmux.KindClaude, 28, lay, "2h 57m"))
+		// " " + label + " " + bar + " " + pct, so the sign lands at the end of
+		// the percentage column wherever the number itself starts.
+		want := 1 + lay.label + 1 + lay.bar + 1 + lay.pct - 1
+		// In cells, not bytes: the meter is drawn out of multi-byte glyphs.
+		at := ansi.StringWidth(got[:strings.Index(got, "%")])
+		if at != want {
+			t.Errorf("%.0f%%: the percentage ends at %d, want %d - it has come away from the bar",
+				percent, at, want)
+		}
+		if !strings.HasSuffix(got, "2h 57m") {
+			t.Errorf("row = %q, want what is left still held at the right edge", got)
+		}
+	}
+}
+
+// Both blocks are drawn to one layout, so the sidebar reads as a single column
+// of figures rather than two that nearly line up.
+func TestBothBlocksShareTheirColumns(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ShowHost = true
+	m.Update(sessionsMsg([]tmux.Session{{Name: "api", Kind: tmux.KindClaude, Managed: true}}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindClaude: {Kind: tmux.KindClaude, Windows: []usage.Window{
+			{Label: "5h", Percent: 8, ResetsAt: time.Now().Add(2*time.Hour + 57*time.Minute)},
+			{Label: "week", Percent: 88, ResetsAt: time.Now().Add(2*24*time.Hour + 12*time.Hour)},
+		}},
+	}
+	m.host = host.Stats{
+		CPU:  host.Meter{Percent: 67, Left: "2.69", Known: true},
+		Mem:  host.Meter{Percent: 55, Left: "7.1G", Known: true},
+		Disk: host.Meter{Percent: 8, Left: "406G", Known: true},
+	}
+
+	rows := append(m.usageBlock(28, 10)[1:], m.hostBlock(28, 10)[1:]...)
+	if len(rows) != 5 {
+		t.Fatalf("got %d meter rows, want 5", len(rows))
+	}
+	want := strings.Index(ansi.Strip(rows[0]), "%")
+	for i, r := range rows {
+		if got := strings.Index(ansi.Strip(r), "%"); got != want {
+			t.Errorf("row %d has its percentage at %d, want %d - the two blocks disagree:\n%s",
+				i, got, want, ansi.Strip(strings.Join(rows, "\n")))
+		}
 	}
 }
 
@@ -62,16 +122,21 @@ func TestUsageRowFitsTheColumn(t *testing.T) {
 	windows := []usage.Window{
 		{Label: "week", Percent: 100},
 		{Label: "5h", Percent: 7.5},
-		// With a time left on it, which is the widest the row ever gets.
+		// A load average past every core on the machine, which is the widest
+		// percentage anything asks for.
+		{Label: "cpu", Percent: 194},
 		{Label: "week", Percent: 100, ResetsAt: now.Add(6*24*time.Hour + 23*time.Hour)},
 	}
-	for _, w := range windows {
-		for _, resetW := range []int{0, 6} {
+	for _, win := range windows {
+		for _, tailW := range []int{0, 6} {
 			for _, width := range []int{16, 20, 28, 40} {
-				got := usageRow(w, tmux.KindClaude, width, 4, resetW, now)
+				lay := meterLayout{label: 4, pct: 4, tail: tailW}
+				lay.bar = barWidthFor(width, lay)
+				got := meterRow(win.Label, win.Percent, tmux.KindClaude, width, lay,
+					untilReset(win, now))
 				if ansi.StringWidth(got) > width {
-					t.Errorf("usageRow(%q, w=%d, resetW=%d) is %d cells, want at most %d: %q",
-						w.Label, width, resetW, ansi.StringWidth(got), width, ansi.Strip(got))
+					t.Errorf("row(%q, w=%d, tail=%d) is %d cells, want at most %d: %q",
+						win.Label, width, tailW, ansi.StringWidth(got), width, ansi.Strip(got))
 				}
 			}
 		}

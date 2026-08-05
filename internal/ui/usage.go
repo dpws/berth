@@ -12,17 +12,18 @@ import (
 	"github.com/dpws/berth/internal/usage"
 )
 
-// A usage meter takes whatever the row can spare between its label and its
-// percentage, so a wider sidebar buys a longer bar rather than more blank.
+// A meter row is " label bar pct  tail": the percentage sits against the meter
+// it belongs to rather than out at the edge, and the bar takes whatever the row
+// can spare, so a wider sidebar buys a longer meter rather than more blank.
 const (
 	// labelMax is the widest a row label may be. Windows are "5h" and "week",
 	// but Codex meters some models separately, and a row then carries the
 	// bucket and the window both ("spark week"). The column only takes what its
 	// widest row asks for, so this is a ceiling rather than a cost.
 	labelMax = 12
-	// barFixed is what the rest of the row costs: a leading space, the label,
-	// a space, two of gap, and "100%".
-	barFixed = 1 + labelMax + 1 + 2 + 4
+	// pctMin is what a percentage costs at its narrowest: "100%". A load
+	// average past 999% is the only thing that asks for more.
+	pctMin = 4
 	// barMin is the shortest meter worth drawing; below it the number alone
 	// says more than six characters of block glyph.
 	barMin = 6
@@ -30,13 +31,28 @@ const (
 	barMax = 24
 )
 
-// barWidthFor is how many cells the meter gets in a row w cells wide, or 0
-// when there is not enough room for one. resetW is the column on the far right
-// holding how long the window has left, which is 0 when no window says.
-func barWidthFor(w, labelW, resetW int) int {
-	n := w - (barFixed - labelMax + labelW)
-	if resetW > 0 {
-		n -= resetW + 1
+// meterLayout is the shape every meter row is drawn to - the rate limits and
+// the machine alike.
+//
+// One layout for both blocks is what keeps them reading as a single column of
+// figures. Measured separately they settle on different widths for the same
+// sidebar, since their right-hand columns differ - "2d 12h" against "7.1G" -
+// and the bars and the percentages then sit a cell or two out of line with each
+// other for no reason a reader could name.
+type meterLayout struct {
+	label int // the label column
+	pct   int // the percentage
+	tail  int // what is left of the thing, on the right; 0 when nothing says
+	bar   int // the meter, or 0 when the row is too narrow for one
+}
+
+// barWidthFor is how many cells the meter gets in a row w cells wide, or 0 when
+// there is not enough room for one. What is left over after " label bar pct"
+// and the right-hand column is the bar.
+func barWidthFor(w int, lay meterLayout) int {
+	n := w - (1 + lay.label + 1 + 1 + lay.pct)
+	if lay.tail > 0 {
+		n -= 1 + lay.tail
 	}
 	if n > barMax {
 		n = barMax
@@ -47,6 +63,44 @@ func barWidthFor(w, labelW, resetW int) int {
 	return n
 }
 
+// meterLayout measures everything about to be drawn in the sidebar's meter rows
+// - both blocks - and settles the columns for all of it.
+func (m *Model) meterLayout(w int, now time.Time) meterLayout {
+	lay := meterLayout{label: 2, pct: pctMin}
+	measure := func(label string, percent float64, tail string) {
+		if n := lipgloss.Width(label); n > lay.label {
+			lay.label = n
+		}
+		if n := lipgloss.Width(pctText(percent)); n > lay.pct {
+			lay.pct = n
+		}
+		if n := lipgloss.Width(tail); n > lay.tail {
+			lay.tail = n
+		}
+	}
+
+	if l, _, ok := m.selectedLimits(); ok {
+		for _, win := range l.Windows {
+			measure(win.Label, win.Percent, untilReset(win, now))
+		}
+	}
+	if m.cfg.ShowHost {
+		for _, x := range hostMeters(m.host) {
+			if x.meter.Known {
+				measure(x.label, x.meter.Percent, x.meter.Left)
+			}
+		}
+	}
+
+	if lay.label > labelMax {
+		lay.label = labelMax
+	}
+	lay.bar = barWidthFor(w, lay)
+	return lay
+}
+
+func pctText(percent float64) string { return fmt.Sprintf("%.0f%%", percent) }
+
 // usageMinRows is the smallest block worth drawing: a divider plus one line.
 const usageMinRows = 2
 
@@ -56,32 +110,44 @@ const usageMinRows = 2
 // bar red, which is the whole point of drawing it.
 const hostBarKind = "host"
 
+// selectedLimits is the rate limits the block would draw, the agent they
+// belong to, and whether there are any: a plain shell has none, and one berth
+// has not read yet has none yet.
+func (m *Model) selectedLimits() (usage.Limits, string, bool) {
+	if m.cfg.HideUsage {
+		return usage.Limits{}, "", false
+	}
+	s, ok := m.selected()
+	if !ok {
+		return usage.Limits{}, "", false
+	}
+	kind := s.DetectedKind()
+	if kind != tmux.KindClaude && kind != tmux.KindCodex {
+		return usage.Limits{}, "", false
+	}
+	l, ok := m.usage[kind]
+	return l, kind, ok
+}
+
 // usageBlock renders the selected session's rate limits as w-wide lines,
 // including the divider above them. It returns nil when there is nothing to
 // show or fewer than budget rows to show it in.
 func (m *Model) usageBlock(w, budget int) []string {
-	if m.cfg.HideUsage || budget < usageMinRows {
+	if budget < usageMinRows {
 		return nil
 	}
-	s, ok := m.selected()
+	limits, kind, ok := m.selectedLimits()
 	if !ok {
 		return nil
 	}
-	kind := s.DetectedKind()
-	if kind != tmux.KindClaude && kind != tmux.KindCodex {
-		return nil // a plain shell has no limits to report
-	}
-	limits, ok := m.usage[kind]
-	if !ok {
-		return nil // not read yet
-	}
-	rows := usageRows(limits, kind, w)
+	now := time.Now()
+	rows := usageRows(limits, kind, w, m.meterLayout(w, now), now)
 	if len(rows) == 0 {
 		return nil
 	}
 	// The divider costs a row, so the block can only be as tall as its budget.
-	// Every row is a window now, and they are cut from the bottom: the first is
-	// the plainest, and on a plan with both it is the one you run into first.
+	// Every row is a window, and they are cut from the bottom: the first is the
+	// plainest, and on a plan with both it is the one you run into first.
 	if room := budget - 1; len(rows) > room {
 		rows = rows[:room]
 	}
@@ -93,99 +159,77 @@ func (m *Model) usageBlock(w, budget int) []string {
 
 // usageRows renders the body of the block, without the divider: one row per
 // window, or the one line saying why there are none.
-func usageRows(l usage.Limits, kind string, w int) []string {
+func usageRows(l usage.Limits, kind string, w int, lay meterLayout, now time.Time) []string {
 	if l.Empty() {
 		if l.Err == nil {
 			return nil
 		}
 		return []string{" " + faintStyle.Render(truncate(l.Err.Error(), max(1, w-1)))}
 	}
-
-	// One label column for the block, as wide as its widest row needs.
-	labelW := 2
-	for _, win := range l.Windows {
-		if n := lipgloss.Width(win.Label); n > labelW {
-			labelW = n
-		}
-	}
-	if labelW > labelMax {
-		labelW = labelMax
-	}
-
-	now := time.Now()
-	resetW := resetWidth(l, now)
-
 	rows := make([]string, 0, len(l.Windows))
 	for _, win := range l.Windows {
-		rows = append(rows, usageRow(win, kind, w, labelW, resetW, now))
+		rows = append(rows, meterRow(win.Label, win.Percent, kind, w, lay, untilReset(win, now)))
 	}
 	return rows
 }
 
-// usageRow lays out one window as: label, meter, value, and how long the window
-// has left.
-func usageRow(win usage.Window, kind string, w, labelW, resetW int, now time.Time) string {
-	tail := ""
-	if resetW > 0 {
-		tail = padLeft(untilReset(win, now), resetW)
-	}
-	return usageRowWith(win, kind, w, labelW, resetW, tail)
-}
-
-// usageRowWith is that layout with the right-hand column supplied, so the host
-// block can borrow it: label, meter, percentage, and whatever is left of the
-// thing, right-aligned to w. The meter is dropped when there is no room for it,
-// and the right-hand column before the number is - a percentage with nothing
-// beside it still says something, the other way round says nothing.
+// meterRow lays one meter out: label, bar, percentage against the bar, and
+// whatever is left of the thing out at the right edge.
 //
-// tailW is what that column has been padded to, and 0 means there is none.
-func usageRowWith(win usage.Window, kind string, w, labelW, tailW int, right string) string {
-	label := footerStyle.Render(padTo(truncate(win.Label, labelW), labelW))
+// The percentage belongs to the meter, so it goes where the meter ends rather
+// than in a column of its own on the far side of the row - a number floating a
+// hand's width from the bar it describes reads as a third thing on the row
+// rather than the same fact twice.
+//
+// What the row gives up first, as it narrows, is the meter: a bar is a picture
+// of a number that is on the row anyway. Then the right-hand column, then the
+// label is cut. With no bar to sit against, the percentage joins the figures on
+// the right rather than trailing the label across an empty row.
+func meterRow(label string, percent float64, kind string, w int, lay meterLayout, left string) string {
+	name := footerStyle.Render(padTo(truncate(label, lay.label), lay.label))
+	pct := padLeft(pctText(percent), lay.pct)
+	styledPct := itemStyle.Render(pct)
 
-	// row lays out " " + label + [" " + bar] + gap + value + [" " + reset],
-	// right-aligned. tail is the plain text of everything after the gap, which
-	// is what the arithmetic needs; styled is the same with colour on it.
-	row := func(bar, tail, styled string) (string, bool) {
-		used := 1 + labelW + lipgloss.Width(tail)
-		if bar != "" {
-			used += 1 + lipgloss.Width(bar)
-		}
-		if used+1 > w {
+	tail, styledTail := "", ""
+	if lay.tail > 0 {
+		tail = padLeft(left, lay.tail)
+		styledTail = faintStyle.Render(tail)
+	}
+
+	// row assembles a candidate and reports whether it fits. head is everything
+	// up to the gap; the tail is held against the right edge by it.
+	row := func(head, styledHead, tail, styledTail string) (string, bool) {
+		gap := w - 1 - lay.label - lipgloss.Width(head) - lipgloss.Width(tail)
+		if tail != "" && gap < 1 {
 			return "", false
 		}
-		if bar != "" {
-			bar = " " + bar
+		if gap < 0 {
+			return "", false
 		}
-		return " " + label + bar + strings.Repeat(" ", w-used) + styled, true
+		return " " + name + styledHead + strings.Repeat(" ", gap) + styledTail, true
 	}
 
-	value := fmt.Sprintf("%3.0f%%", win.Percent)
-	styledValue := itemStyle.Render(value)
-
-	// The right-hand column is a column: a "52m" beside a "6d 23h" would
-	// otherwise walk the percentages out of line with each other.
-	tail, styled := value, styledValue
-	if tailW > 0 {
-		tail += " " + right
-		styled += " " + faintStyle.Render(right)
+	bar := ""
+	if lay.bar > 0 {
+		bar = usageBar(percent, kind, lay.bar)
 	}
-
-	for _, attempt := range []struct{ bar, tail, styled string }{
-		{usageBar(win.Percent, kind, barWidthFor(w, labelW, tailW)), tail, styled},
-		{"", tail, styled},
-		// No room for both: the meter goes before the figures do, and the
-		// right-hand column before the percentage.
-		{usageBar(win.Percent, kind, barWidthFor(w, labelW, 0)), value, styledValue},
-		{"", value, styledValue},
-	} {
-		if attempt.bar == "" && attempt.tail == "" {
-			continue
+	if bar != "" {
+		head, styled := " "+strings.Repeat(" ", lay.bar)+" "+pct, " "+bar+" "+styledPct
+		if out, ok := row(head, styled, tail, styledTail); ok {
+			return out
 		}
-		if out, ok := row(attempt.bar, attempt.tail, attempt.styled); ok {
+		if out, ok := row(head, styled, "", ""); ok {
 			return out
 		}
 	}
-	return truncate(" "+label+" "+styledValue, w)
+	// No meter: the percentage keeps the figures company on the right instead.
+	if out, ok := row("", "", pct+" "+tail, styledPct+" "+styledTail); lay.tail > 0 && ok {
+		return out
+	}
+	if out, ok := row("", "", pct, styledPct); ok {
+		return out
+	}
+	return truncate(" "+name+" "+styledPct, w)
 }
 
 // padLeft right-aligns s in w cells.
@@ -266,10 +310,26 @@ func usageBar(percent float64, kind string, width int) string {
 		faintStyle.Render(strings.Repeat("░", width-filled))
 }
 
+// hostMeters is the machine's three rows, in the order they are drawn.
+func hostMeters(s host.Stats) []struct {
+	label string
+	meter host.Meter
+} {
+	return []struct {
+		label string
+		meter host.Meter
+	}{
+		{"cpu", s.CPU},
+		{"mem", s.Mem},
+		{"disk", s.Disk},
+	}
+}
+
 // hostBlock renders the machine berth is running on, in the same shape as the
-// rate limits above it: a divider, then a meter per thing with what is left of
-// it on the right. It returns nil when the block is off, when the machine keeps
-// its accounting somewhere berth cannot read, or when there is no room.
+// rate limits above it and to the same columns: a divider, then a meter per
+// thing with what is left of it on the right. It returns nil when the block is
+// off, when the machine keeps its accounting somewhere berth cannot read, or
+// when there is no room.
 //
 // It sits under the limits because it answers a different question. The limits
 // are about the plan you are spending; this is about the box the work runs on,
@@ -278,33 +338,16 @@ func (m *Model) hostBlock(w, budget int) []string {
 	if !m.cfg.ShowHost || budget < usageMinRows || m.host.Empty() {
 		return nil
 	}
+	lay := m.meterLayout(w, time.Now())
 
-	// The labels are fixed, so the column is too - no need to measure them.
-	const labelW = 4
-	meters := []struct {
-		label string
-		meter host.Meter
-	}{
-		{"cpu", m.host.CPU},
-		{"mem", m.host.Mem},
-		{"disk", m.host.Disk},
-	}
-
-	leftW := 0
-	for _, x := range meters {
-		if x.meter.Known && ansi.StringWidth(x.meter.Left) > leftW {
-			leftW = ansi.StringWidth(x.meter.Left)
-		}
-	}
-
-	rows := make([]string, 0, len(meters))
-	for _, x := range meters {
+	rows := make([]string, 0, 3)
+	for _, x := range hostMeters(m.host) {
 		if !x.meter.Known {
 			// A number the machine would not give up is left out rather than
 			// drawn as a full or empty bar, either of which would be a lie.
 			continue
 		}
-		rows = append(rows, hostRow(x.label, x.meter, w, labelW, leftW))
+		rows = append(rows, meterRow(x.label, x.meter.Percent, hostBarKind, w, lay, x.meter.Left))
 	}
 	if len(rows) == 0 {
 		return nil
@@ -316,11 +359,4 @@ func (m *Model) hostBlock(w, budget int) []string {
 	out := make([]string, 0, len(rows)+1)
 	out = append(out, dividerStyle.Render(strings.Repeat("─", max(0, w))))
 	return append(out, rows...)
-}
-
-// hostRow lays one meter out the way a usage row is laid out, so the two blocks
-// read as one column of figures rather than two designs stacked.
-func hostRow(label string, meter host.Meter, w, labelW, leftW int) string {
-	win := usage.Window{Label: label, Percent: meter.Percent}
-	return usageRowWith(win, hostBarKind, w, labelW, leftW, padLeft(meter.Left, leftW))
 }

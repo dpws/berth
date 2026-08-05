@@ -46,27 +46,32 @@ func TestBarWidthFollowsTheSidebar(t *testing.T) {
 		200: barMax,
 	}
 	for w, want := range cases {
-		if got := barWidthFor(w, 4); got != want {
+		if got := barWidthFor(w, 4, 0); got != want {
 			t.Errorf("barWidthFor(%d) = %d, want %d", w, got, want)
 		}
 	}
 	// A wider label leaves the meter less room, not the row more width.
-	if barWidthFor(28, 9) >= barWidthFor(28, 4) {
+	if barWidthFor(28, 9, 0) >= barWidthFor(28, 4, 0) {
 		t.Error("a longer label did not take room from the meter")
 	}
 }
 
 func TestUsageRowFitsTheColumn(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	windows := []usage.Window{
 		{Label: "week", Percent: 100},
 		{Label: "5h", Percent: 7.5},
+		// With a time left on it, which is the widest the row ever gets.
+		{Label: "week", Percent: 100, ResetsAt: now.Add(6*24*time.Hour + 23*time.Hour)},
 	}
 	for _, w := range windows {
-		for _, width := range []int{16, 20, 28, 40} {
-			got := usageRow(w, tmux.KindClaude, width, 4)
-			if ansi.StringWidth(got) > width {
-				t.Errorf("usageRow(%q, w=%d) is %d cells, want at most %d: %q",
-					w.Label, width, ansi.StringWidth(got), width, ansi.Strip(got))
+		for _, resetW := range []int{0, 6} {
+			for _, width := range []int{16, 20, 28, 40} {
+				got := usageRow(w, tmux.KindClaude, width, 4, resetW, now)
+				if ansi.StringWidth(got) > width {
+					t.Errorf("usageRow(%q, w=%d, resetW=%d) is %d cells, want at most %d: %q",
+						w.Label, width, resetW, ansi.StringWidth(got), width, ansi.Strip(got))
+				}
 			}
 		}
 	}
@@ -115,9 +120,10 @@ func TestUsageBlockRespectsItsBudget(t *testing.T) {
 			t.Errorf("budget %d produced %d rows", budget, len(got))
 		}
 	}
-	// With room to spare the block is a divider, both windows, and the reset.
-	if got := len(m.usageBlock(28, 8)); got != 4 {
-		t.Errorf("full block has %d rows, want 4", got)
+	// With room to spare the block is a divider and both windows. What each
+	// one has left rides on its own row rather than costing another.
+	if got := len(m.usageBlock(28, 8)); got != 3 {
+		t.Errorf("full block has %d rows, want 3", got)
 	}
 }
 
@@ -146,9 +152,10 @@ func TestTightBudgetKeepsTheNoteOverTheLastMeter(t *testing.T) {
 }
 
 // A reading goes stale as soon as the agent stops running, which for Codex is
-// most of the time. The reset is a fixed moment it was told about, so it is
-// still true then - and that is exactly when you want to know it.
-func TestResetShowsAlongsideAStaleReading(t *testing.T) {
+// most of the time. The time left is worked out from a fixed moment the agent
+// was told about, so it is still right then - and that is exactly when you want
+// it.
+func TestTimeLeftShowsAlongsideAStaleReading(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessionsMsg([]tmux.Session{
 		{Name: "work", Kind: tmux.KindCodex, Managed: true},
@@ -156,65 +163,94 @@ func TestResetShowsAlongsideAStaleReading(t *testing.T) {
 	m.usage = map[string]usage.Limits{
 		tmux.KindCodex: {Kind: tmux.KindCodex, Sampled: time.Now().Add(-6 * time.Hour),
 			Windows: []usage.Window{
-				{Label: "week", Percent: 52, ResetsAt: time.Now().Add(3 * 24 * time.Hour)},
+				{Label: "5h", Percent: 15, ResetsAt: time.Now().Add(2*time.Hour + 52*time.Minute + time.Second)},
+				{Label: "week", Percent: 85, ResetsAt: time.Now().Add(3*24*time.Hour + time.Second)},
 			}},
 	}
 
-	block := ansi.Strip(strings.Join(m.usageBlock(28, 10), "\n"))
-	if !strings.Contains(block, "resets ") {
-		t.Errorf("block = %q, want the reset shown", block)
+	rows := m.usageBlock(28, 10)
+	block := ansi.Strip(strings.Join(rows, "\n"))
+	// Each window carries its own, on its own row, rather than the block
+	// picking one of them to report underneath.
+	if !strings.Contains(ansi.Strip(rows[1]), "2h 52m") {
+		t.Errorf("5h row = %q, want the time left on it", ansi.Strip(rows[1]))
+	}
+	if !strings.Contains(ansi.Strip(rows[2]), "3d") {
+		t.Errorf("week row = %q, want its own time left", ansi.Strip(rows[2]))
+	}
+	if strings.Contains(block, "resets ") {
+		t.Errorf("block = %q, want no separate resets line", block)
 	}
 	if !strings.Contains(block, "as of ") {
-		t.Errorf("block = %q, want the age still shown beside it", block)
-	}
-	// Three days out: a bare clock time would read as this afternoon.
-	if strings.Contains(block, "resets "+time.Now().Add(3*24*time.Hour).Format("15:04")+"\n") {
-		t.Errorf("block = %q, want the reset day named", block)
+		t.Errorf("block = %q, want the age still shown", block)
 	}
 }
 
-// With room for one line under the meters, the reset is the one to keep: the
-// meters cannot be read for it, and it does not go out of date.
-func TestTightBudgetKeepsTheResetOverTheAge(t *testing.T) {
+// The percentages have to stay in a column of their own. A "52m" beside a
+// "6d 23h" would otherwise walk them out of line with each other.
+func TestTimesLeftShareAColumn(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessionsMsg([]tmux.Session{
 		{Name: "work", Kind: tmux.KindCodex, Managed: true},
 	}))
 	m.usage = map[string]usage.Limits{
-		tmux.KindCodex: {Kind: tmux.KindCodex, Sampled: time.Now().Add(-6 * time.Hour),
-			Windows: []usage.Window{
-				{Label: "5h", Percent: 28, ResetsAt: time.Now().Add(2 * time.Hour)},
-			}},
+		tmux.KindCodex: {Kind: tmux.KindCodex, Windows: []usage.Window{
+			{Label: "5h", Percent: 15, ResetsAt: time.Now().Add(52 * time.Minute)},
+			{Label: "week", Percent: 85, ResetsAt: time.Now().Add(6*24*time.Hour + 23*time.Hour)},
+		}},
 	}
 
-	// Divider, the meter, one note.
-	got := m.usageBlock(28, 3)
-	if len(got) != 3 {
-		t.Fatalf("block has %d rows, want 3: %q", len(got), ansi.Strip(strings.Join(got, "|")))
-	}
-	if last := ansi.Strip(got[2]); !strings.Contains(last, "resets") {
-		t.Errorf("last row = %q, want the reset", last)
+	rows := m.usageBlock(40, 10)
+	first := strings.Index(ansi.Strip(rows[1]), "%")
+	second := strings.Index(ansi.Strip(rows[2]), "%")
+	if first != second {
+		t.Errorf("percentages sit at %d and %d, want one column:\n%q\n%q",
+			first, second, ansi.Strip(rows[1]), ansi.Strip(rows[2]))
 	}
 }
 
 // A window whose reset has already passed has rolled over; the agent simply has
-// not run since to say so. Reporting it would name a time in the past.
+// not run since to say so. Reporting it would count down from a time gone by.
 func TestPastResetsAreNotShown(t *testing.T) {
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
-	l := usage.Limits{Windows: []usage.Window{
-		{Label: "5h", Percent: 90, ResetsAt: now.Add(-time.Hour)},
-		{Label: "week", Percent: 40, ResetsAt: now.Add(48 * time.Hour)},
-	}}
-	if got := soonestReset(l, now); !got.Equal(now.Add(48 * time.Hour)) {
-		t.Errorf("soonestReset = %v, want the weekly boundary still ahead", got)
+	past := usage.Window{Label: "5h", Percent: 90, ResetsAt: now.Add(-time.Hour)}
+	ahead := usage.Window{Label: "week", Percent: 40, ResetsAt: now.Add(48 * time.Hour)}
+
+	if got := untilReset(past, now); got != "" {
+		t.Errorf("untilReset(passed) = %q, want nothing", got)
+	}
+	if got := untilReset(usage.Window{Label: "5h"}, now); got != "" {
+		t.Errorf("untilReset(no reset at all) = %q, want nothing", got)
+	}
+	if got := untilReset(ahead, now); got != "2d" {
+		t.Errorf("untilReset(two days out) = %q, want %q", got, "2d")
 	}
 
-	l.Windows = l.Windows[:1]
-	if got := soonestReset(l, now); !got.IsZero() {
-		t.Errorf("soonestReset = %v, want nothing when every boundary has passed", got)
+	// The column is only as wide as what is actually shown, so a block whose
+	// windows have all rolled over is laid out exactly as one with no resets.
+	l := usage.Limits{Windows: []usage.Window{past}}
+	if got := resetWidth(l, now); got != 0 {
+		t.Errorf("resetWidth = %d, want no column at all", got)
 	}
-	if got := usageNotes(l, 28, now); len(got) != 0 {
-		t.Errorf("notes = %q, want none", got)
+}
+
+func TestShortUntil(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "<1m"},
+		{52 * time.Minute, "52m"},
+		{2*time.Hour + 52*time.Minute, "2h 52m"},
+		{3 * time.Hour, "3h"},
+		{23*time.Hour + 59*time.Minute, "23h 59m"},
+		{3 * 24 * time.Hour, "3d"},
+		{6*24*time.Hour + 23*time.Hour, "6d 23h"},
+	}
+	for _, c := range cases {
+		if got := shortUntil(c.d); got != c.want {
+			t.Errorf("shortUntil(%v) = %q, want %q", c.d, got, c.want)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/usage"
 )
@@ -29,9 +30,13 @@ const (
 )
 
 // barWidthFor is how many cells the meter gets in a row w cells wide, or 0
-// when there is not enough room for one.
-func barWidthFor(w, labelW int) int {
+// when there is not enough room for one. resetW is the column on the far right
+// holding how long the window has left, which is 0 when no window says.
+func barWidthFor(w, labelW, resetW int) int {
 	n := w - (barFixed - labelMax + labelW)
+	if resetW > 0 {
+		n -= resetW + 1
+	}
 	if n > barMax {
 		n = barMax
 	}
@@ -120,23 +125,28 @@ func usageRows(l usage.Limits, kind string, w int) (rows []string, notes []strin
 		labelW = labelMax
 	}
 
+	now := time.Now()
+	resetW := resetWidth(l, now)
+
 	rows = make([]string, 0, len(l.Windows)+1)
 	for _, win := range l.Windows {
-		rows = append(rows, usageRow(win, kind, w, labelW))
+		rows = append(rows, usageRow(win, kind, w, labelW, resetW, now))
 	}
-	return rows, usageNotes(l, w, time.Now())
+	return rows, usageNotes(l, w, now)
 }
 
-// usageRow lays out one window as: label, meter, value, right-aligned to w.
-// The meter is dropped when there is no room for it, and when the source gives
-// tokens rather than a percentage, since there is then no ceiling to measure
-// them against.
-func usageRow(win usage.Window, kind string, w int, labelW int) string {
+// usageRow lays out one window as: label, meter, value, and how long the window
+// has left, right-aligned to w. The meter is dropped when there is no room for
+// it, and the time left before the number is: a percentage with no idea when it
+// rolls over still says something, the other way round says nothing.
+func usageRow(win usage.Window, kind string, w, labelW, resetW int, now time.Time) string {
 	label := footerStyle.Render(padTo(truncate(win.Label, labelW), labelW))
 
-	// row lays out " " + label + [" " + bar] + gap + value, right-aligned.
-	row := func(bar, value string, styled string) (string, bool) {
-		used := 1 + labelW + lipgloss.Width(value)
+	// row lays out " " + label + [" " + bar] + gap + value + [" " + reset],
+	// right-aligned. tail is the plain text of everything after the gap, which
+	// is what the arithmetic needs; styled is the same with colour on it.
+	row := func(bar, tail, styled string) (string, bool) {
+		used := 1 + labelW + lipgloss.Width(tail)
 		if bar != "" {
 			used += 1 + lipgloss.Width(bar)
 		}
@@ -150,17 +160,89 @@ func usageRow(win usage.Window, kind string, w int, labelW int) string {
 	}
 
 	value := fmt.Sprintf("%3.0f%%", win.Percent)
-	styled := itemStyle.Render(value)
-	if bar := barWidthFor(w, labelW); bar > 0 {
-		if out, ok := row(usageBar(win.Percent, kind, bar), value, styled); ok {
+	styledValue := itemStyle.Render(value)
+
+	// The time left sits in a column of its own, so a "52m" beside a "6d 23h"
+	// does not walk the percentages out of line with each other.
+	tail, styled := value, styledValue
+	if resetW > 0 {
+		left := padLeft(untilReset(win, now), resetW)
+		tail += " " + left
+		styled += " " + faintStyle.Render(left)
+	}
+
+	for _, attempt := range []struct{ bar, tail, styled string }{
+		{usageBar(win.Percent, kind, barWidthFor(w, labelW, resetW)), tail, styled},
+		{"", tail, styled},
+		// No room for both: the meter goes before the figures do, and the time
+		// left before the percentage.
+		{usageBar(win.Percent, kind, barWidthFor(w, labelW, 0)), value, styledValue},
+		{"", value, styledValue},
+	} {
+		if attempt.bar == "" && attempt.tail == "" {
+			continue
+		}
+		if out, ok := row(attempt.bar, attempt.tail, attempt.styled); ok {
 			return out
 		}
 	}
-	// Too narrow for a meter: the number alone still says what matters.
-	if out, ok := row("", value, styled); ok {
-		return out
+	return truncate(" "+label+" "+styledValue, w)
+}
+
+// padLeft right-aligns s in w cells.
+func padLeft(s string, w int) string {
+	if gap := w - ansi.StringWidth(s); gap > 0 {
+		return strings.Repeat(" ", gap) + s
 	}
-	return truncate(" "+label+" "+styled, w)
+	return s
+}
+
+// untilReset is how long this window has left, or "" when it does not say -
+// including when the moment it named has passed, since the window has rolled
+// over and the agent has simply not run since to report the next one.
+func untilReset(win usage.Window, now time.Time) string {
+	if win.ResetsAt.IsZero() || !win.ResetsAt.After(now) {
+		return ""
+	}
+	return shortUntil(win.ResetsAt.Sub(now))
+}
+
+// shortUntil writes a wait as at most two units. A weekly window is days out
+// and a five-hour one is minutes, and both have to read at a glance in a column
+// a few cells wide - "2h 52m" says more there than "17:40" ever did, which left
+// you working out what that meant from the clock on the wall.
+func shortUntil(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		h, m := int(d.Hours()), int(d.Minutes())%60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh %dm", h, m)
+	default:
+		days, h := int(d.Hours())/24, int(d.Hours())%24
+		if h == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd %dh", days, h)
+	}
+}
+
+// resetWidth is how wide the column of times left has to be, and 0 when not one
+// window says - which is what keeps the block exactly as it was for a source
+// that reports no reset at all.
+func resetWidth(l usage.Limits, now time.Time) int {
+	n := 0
+	for _, win := range l.Windows {
+		if s := untilReset(win, now); ansi.StringWidth(s) > n {
+			n = ansi.StringWidth(s)
+		}
+	}
+	return n
 }
 
 // usageBar draws a meter tinted by the agent it belongs to, turning red as the
@@ -185,30 +267,18 @@ func usageBar(percent float64, kind string, width int) string {
 		faintStyle.Render(strings.Repeat("░", width-filled))
 }
 
-// usageNotes are the lines under the meters: when the window rolls over, and
-// how old the reading is.
-//
-// The reset leads. It is the thing the meters cannot be read for - a bar most
-// of the way across says nothing about when you get the room back - and it
-// stays true however old the reading is, since it is a fixed moment the agent
-// was told about rather than anything berth is measuring. "as of" only
-// qualifies how much to trust the percentage, so on a sidebar with room for
-// one line it is the one to lose.
+// usageNotes are the lines under the meters. Only one is left: how old the
+// reading is. When a window rolls over is on the window's own row now, where it
+// belongs - a block metering two of them had to pick one to report, and it
+// picked the soonest, which is not the same as the one you are up against.
 func usageNotes(l usage.Limits, w int, now time.Time) []string {
-	line := func(s string) string {
-		return " " + faintStyle.Render(truncate(s, max(1, w-1)))
-	}
-
-	var out []string
-	if next := soonestReset(l, now); !next.IsZero() {
-		out = append(out, line("resets "+dayTime(next, now)))
-	}
 	// Numbers only arrive while an agent is running, so old ones say when they
 	// were taken rather than pretending to be current.
-	if !l.Sampled.IsZero() && now.Sub(l.Sampled) > usageStaleAfter {
-		out = append(out, line("as of "+dayTime(l.Sampled, now)))
+	if l.Sampled.IsZero() || now.Sub(l.Sampled) <= usageStaleAfter {
+		return nil
 	}
-	return out
+	return []string{" " + faintStyle.Render(
+		truncate("as of "+dayTime(l.Sampled, now), max(1, w-1)))}
 }
 
 // dayTime writes a moment as a clock time, naming the day when it is not
@@ -229,20 +299,4 @@ func dayTime(at, now time.Time) string {
 		return at.Format("15:04")
 	}
 	return at.Format("Jan 2 15:04")
-}
-
-// soonestReset returns the first window boundary still ahead of us. One that
-// has passed is left out: the window has already rolled over, and the agent
-// simply has not been run since to say so.
-func soonestReset(l usage.Limits, now time.Time) time.Time {
-	var out time.Time
-	for _, win := range l.Windows {
-		if win.ResetsAt.IsZero() || win.ResetsAt.Before(now) {
-			continue
-		}
-		if out.IsZero() || win.ResetsAt.Before(out) {
-			out = win.ResetsAt
-		}
-	}
-	return out
 }

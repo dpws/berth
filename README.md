@@ -540,18 +540,17 @@ Select an agent session and the block above the legend says how much of its
 rate limit is gone:
 
 ```
-┌──────────────────┬─────────────────────────
-│ BERTH 3      dev │ main  ↑1  ~2 +1
-│──────────────────┼─────────────────────────
-│  ● api    claude │
-│  ○ web    codex  │
-│──────────────────│
-│ 5h   ▓▓▓░░░  28% │
-│ week ▓▓▓▓▓░  61% │
-│ resets 14:20     │
-│──────────────────│
-│ n new  x kill    │
-└──────────────────┴─────────────────────────
+┌──────────────────────────┬─────────────────────────
+│ BERTH 3              dev │ main  ↑1  ~2 +1
+│──────────────────────────┼─────────────────────────
+│  ● api            claude │
+│  ○ web            codex  │
+│──────────────────────────│
+│ 5h   ▓▓░░░░░   28%  2h 5m│
+│ week ▓▓▓▓░░░   61% 2d 13h│
+│──────────────────────────│
+│ n new  x kill            │
+└──────────────────────────┴─────────────────────────
 ```
 
 **The two agents are not equally well served here, and the block says which
@@ -614,19 +613,24 @@ only refresh while a Claude session is running, so a reading older than twenty
 minutes is labelled `as of 14:05` rather than passed off as live — with the day
 named too (`as of Aug 2 14:05`) once it is no longer today's.
 
-**Under the meters, when the agent said one: `resets Aug 8 10:15`** — the next
-window boundary still ahead, whichever window gets there first. It sits beside
-the age rather than instead of it, since a reading going stale does not make the
-reset wrong: it is a fixed moment the agent was told about, not something berth
-is measuring, and a stale block is exactly when "when do I get it back?" is the
-question. The day is named unless it is today's, because a weekly window rolls
-over up to seven days out and `resets 10:15` for something three days away is
-worse than saying nothing. A boundary already behind us is left out — that
-window has rolled over, and the agent has simply not run since to say so.
+**How long each window has left rides on its own row, after the percentage** —
+`28%  2h 5m`, `61% 2d 13h`. Per window, because a block metering two of them
+has to say which one it means: the soonest boundary is rarely the one you are
+up against, and a line underneath saying `resets 14:20` while the weekly window
+sat at 85% answered a question nobody asked.
 
-On a short terminal the block gives up rows from the bottom, and the reset is
-the last note standing: the meters cannot be read for it, while `as of` only
-qualifies a percentage that is on screen anyway.
+It counts down rather than naming a time, since `2h 5m` is the number you want
+and `14:20` is one you have to subtract the clock from — and a weekly window
+lands days out, where a bare clock time reads as this afternoon. At most two
+units, so the column stays a few cells wide. A reading going stale does not
+make it wrong: it is worked out from a fixed moment the agent was told about,
+not from anything berth is measuring. A boundary already behind us shows
+nothing — that window has rolled over, and the agent has simply not run since
+to say what the next one is.
+
+The times share a column of their own, so the percentages stay in line with
+each other. On a narrow sidebar the meter goes first and the times outlast it:
+a bar is a picture of a number that is already on the row.
 
 **What berth will not do.** Claude Code's `/usage` reaches an internal endpoint
 with the Claude Code login token. Driving that from another program is

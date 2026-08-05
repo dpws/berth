@@ -1123,6 +1123,15 @@ func TestShiftedCharactersAreTypedThrough(t *testing.T) {
 	}
 }
 
+// windUp gives a model a clock the test drives, and returns the handle that
+// moves it. Notifications are held back on a timer now, so a test that cannot
+// move time cannot see the other side of one.
+func windUp(m *Model) func(time.Duration) {
+	at := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return at }
+	return func(d time.Duration) { at = at.Add(d) }
+}
+
 // notifyStrings runs a reading through the model and returns what it would send
 // the terminal, if anything.
 func notifyStrings(t *testing.T, m *Model, infos map[string]agent.Info) string {
@@ -1146,6 +1155,7 @@ func TestNotifyOnlyOnAChange(t *testing.T) {
 	m := newTestModel()
 	m.cfg.NotifyBell, m.cfg.NotifyDesktop = true, true
 	m.cfg.NotifyWaiting, m.cfg.NotifyIdle = true, true
+	wind := windUp(m)
 
 	first := map[string]agent.Info{
 		"api": {Status: agent.Busy},
@@ -1159,21 +1169,29 @@ func TestNotifyOnlyOnAChange(t *testing.T) {
 		t.Errorf("an unchanged reading said %q, want nothing", got)
 	}
 
-	got := notifyStrings(t, m, map[string]agent.Info{
-		"api": {Status: agent.Idle},    // answered, and now finished
+	settled := map[string]agent.Info{
+		"api": {Status: agent.Idle},    // work stopped
 		"web": {Status: agent.Waiting}, // has come to a question
-	})
+	}
+	got := notifyStrings(t, m, settled)
 	if !strings.Contains(got, "web is waiting on you") {
 		t.Errorf("said %q, want the session that came to a question", got)
 	}
-	if !strings.Contains(got, "api has finished") {
-		t.Errorf("said %q, want the session that finished", got)
+	// The one that went quiet is not announced yet: it has only just gone
+	// quiet, which is not the same as having finished.
+	if strings.Contains(got, "api has finished") {
+		t.Errorf("said %q, want the finish held back until it is believable", got)
 	}
 	// One ring for the pair of them: a terminal cannot ring twice as loudly.
 	// The ring leads, and is the only bare bell - OSC 9 ends in one of its own,
 	// which is a string terminator rather than a sound.
 	if !strings.HasPrefix(got, "\a") || strings.Contains(strings.TrimPrefix(got, "\a"), "\a\a") {
 		t.Errorf("said %q, want exactly one ring, leading", got)
+	}
+
+	wind(idleSettles)
+	if got := notifyStrings(t, m, settled); !strings.Contains(got, "api has finished") {
+		t.Errorf("after settling, said %q, want the session that finished", got)
 	}
 }
 
@@ -1183,14 +1201,62 @@ func TestFinishedMeansWorkThatStopped(t *testing.T) {
 	m := newTestModel()
 	m.cfg.NotifyBell = true
 	m.cfg.NotifyWaiting, m.cfg.NotifyIdle = false, true
+	wind := windUp(m)
 
+	idle := map[string]agent.Info{"api": {Status: agent.Idle}}
 	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Waiting}})
-	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Idle}}); got != "" {
+	notifyStrings(t, m, idle)
+	wind(idleSettles)
+	if got := notifyStrings(t, m, idle); got != "" {
 		t.Errorf("waiting to idle said %q, want nothing - no turn ended there", got)
 	}
+
 	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Busy}})
-	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Idle}}); got == "" {
+	notifyStrings(t, m, idle)
+	wind(idleSettles)
+	if got := notifyStrings(t, m, idle); got == "" {
 		t.Error("work turning into idle said nothing, want a notification")
+	}
+}
+
+// An agent drops to idle for a second or two in the middle of a turn. Saying so
+// is worse than saying nothing: it is the same sound as the real thing, and it
+// arrives while the session is still going.
+func TestIdleHasToStayIdleToCount(t *testing.T) {
+	m := newTestModel()
+	m.cfg.NotifyBell, m.cfg.NotifyIdle = true, true
+	wind := windUp(m)
+
+	busy := map[string]agent.Info{"api": {Status: agent.Busy}}
+	idle := map[string]agent.Info{"api": {Status: agent.Idle}}
+
+	notifyStrings(t, m, busy)
+	if got := notifyStrings(t, m, idle); got != "" {
+		t.Errorf("the moment it went quiet, said %q, want nothing yet", got)
+	}
+	// Back to work before it settled: nothing was ever said, and nothing is
+	// left waiting to be.
+	wind(idleSettles / 2)
+	if got := notifyStrings(t, m, busy); got != "" {
+		t.Errorf("work resuming said %q, want nothing", got)
+	}
+	if len(m.idleAt) != 0 {
+		t.Errorf("a session back at work is still down as finishing: %v", m.idleAt)
+	}
+	// And the wait starts over rather than carrying on from the first blip.
+	notifyStrings(t, m, idle)
+	wind(idleSettles - time.Second)
+	if got := notifyStrings(t, m, idle); got != "" {
+		t.Errorf("just short of settling, said %q, want nothing yet", got)
+	}
+	wind(2 * time.Second)
+	if got := notifyStrings(t, m, idle); got == "" {
+		t.Error("having stayed quiet, said nothing - want the notification")
+	}
+	// Once said, it is not said again for as long as it stays idle.
+	wind(10 * idleSettles)
+	if got := notifyStrings(t, m, idle); got != "" {
+		t.Errorf("a session still idle said %q again, want it said once", got)
 	}
 }
 

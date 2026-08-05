@@ -153,6 +153,10 @@ type Model struct {
 	// what makes a change a change. Nil until the first reading has landed.
 	seen map[string]agent.Status
 
+	// idleAt is when a session went quiet, for the ones that have and have not
+	// yet been quiet long enough to say so. See idleSettles.
+	idleAt map[string]time.Time
+
 	// taskbarLit says the terminal has been asked to mark its place in the
 	// taskbar, so the ask is made once when it becomes true and once more when
 	// it stops - rather than on every reading for as long as it holds.
@@ -521,6 +525,20 @@ func (m *Model) quit() tea.Cmd {
 	return tea.Sequence(tea.Raw(taskbarClear), tea.Quit)
 }
 
+// idleSettles is how long a session has to stay quiet before berth calls it
+// finished.
+//
+// An agent drops to idle for a second or two in the middle of a turn - between
+// one piece of work and the next - and announcing that is worse than saying
+// nothing: it is the same sound as the real thing, arriving while the session
+// is still going, and after the second or third one you stop believing any of
+// them. A turn that has genuinely ended stays ended, so waiting a few seconds
+// costs nothing but the wait.
+//
+// The other moment is not held back. A session blocked on you is blocked now,
+// and a permission prompt does not flicker.
+const idleSettles = 10 * time.Second
+
 // notifyFor works out what to say about the change from the last reading to
 // this one, and returns the command that says it.
 //
@@ -538,28 +556,57 @@ func (m *Model) notifyFor(fresh map[string]agent.Info) tea.Cmd {
 		return nil
 	}
 
+	now := m.now()
 	var said []string
 	for name, info := range fresh {
 		was, known := m.seen[name]
 		m.seen[name] = info.Status
+
+		if info.Status != agent.Idle {
+			// Work has started again, or a question has come up. Either way
+			// the session is no longer on its way to being finished.
+			delete(m.idleAt, name)
+		}
 		if !known || was == info.Status {
 			continue
 		}
 		switch {
 		case info.Status.NeedsInput() && m.cfg.NotifiesWaiting():
+			// Not held back: a session blocked on you is blocked now, and it
+			// does not flicker the way going quiet does.
 			said = append(said, safeTitle(name)+" is waiting on you")
-		case info.Status == agent.Idle && was.Active() && m.cfg.NotifiesIdle():
+		case info.Status == agent.Idle && was.Active():
 			// Only from work to idle. Anything else - a session berth has just
 			// started following, one coming back from waiting - is not a turn
-			// that finished.
+			// that finished. And it is only a candidate: see idleSettles.
+			if m.idleAt == nil {
+				m.idleAt = make(map[string]time.Time, 1)
+			}
+			m.idleAt[name] = now
+		}
+	}
+
+	// The candidates that have stayed quiet long enough to mean it.
+	for name, at := range m.idleAt {
+		if _, ok := fresh[name]; !ok {
+			delete(m.idleAt, name)
+			continue
+		}
+		if now.Sub(at) < idleSettles {
+			continue
+		}
+		delete(m.idleAt, name)
+		if m.cfg.NotifiesIdle() {
 			said = append(said, safeTitle(name)+" has finished")
 		}
 	}
+
 	// Sessions that have gone take their history with them, so a name reused
 	// later starts over rather than being compared against a dead session.
 	for name := range m.seen {
 		if _, ok := fresh[name]; !ok {
 			delete(m.seen, name)
+			delete(m.idleAt, name)
 		}
 	}
 	if len(said) == 0 {

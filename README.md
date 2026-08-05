@@ -775,7 +775,13 @@ The other two are when. **`notify_waiting`** is a session blocked on a question
 or a permission prompt — the one that is actually costing you time, and on by
 default so that switching on a bell rings for something. **`notify_idle`** is a
 turn that finished, which fires more often and for sessions you were not
-waiting on. Neither does anything on its own: with no bell and no desktop
+waiting on. That one is held back ten seconds: an agent drops to idle for a
+second or two in the middle of a turn, between one piece of work and the next,
+and announcing that is worse than saying nothing — it is the same sound as the
+real thing, arriving while the session is still going, and after the second or
+third one you stop believing any of them. A turn that has genuinely ended stays
+ended, so the wait costs nothing but the wait. Waiting on you is not held back:
+it is blocking now, and a permission prompt does not flicker. Neither does anything on its own: with no bell and no desktop
 notification there is no way of saying it, and berth stays quiet.
 
 **A bell is only as loud as your terminal makes it.** berth sends the signal;

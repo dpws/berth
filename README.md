@@ -549,8 +549,8 @@ but the meters and the branch read better with the full range.
 
 ## Rate limits
 
-Select an agent session and the block above the legend says how much of its
-rate limit is gone:
+Select an agent session and the block under the list says how much of its rate
+limit is gone:
 
 ```
 ┌──────────────────────────┬─────────────────────────
@@ -561,8 +561,6 @@ rate limit is gone:
 │──────────────────────────│
 │ 5h   ▓▓░░░░░░  28%  2h 5m│
 │ week ▓▓▓▓▓░░░  61% 2d 13h│
-│──────────────────────────│
-│ n new  x kill            │
 └──────────────────────────┴─────────────────────────
 ```
 

@@ -117,6 +117,39 @@ func TestBothBlocksShareTheirColumns(t *testing.T) {
 	}
 }
 
+// The columns belong to the sidebar, not to whatever the cursor is on. A plain
+// shell has no limits of its own, so measuring only the selection laid its rows
+// out as though the times column did not exist and the machine's meters came
+// out wider than the same meters a moment earlier.
+func TestTheLayoutDoesNotMoveWithTheCursor(t *testing.T) {
+	m := newTestModel()
+	m.cfg.ShowHost = true
+	m.Update(sessionsMsg([]tmux.Session{
+		{Name: "api", Kind: tmux.KindClaude, Managed: true},
+		{Name: "dots", Kind: tmux.KindShell, Managed: true},
+	}))
+	m.usage = map[string]usage.Limits{
+		tmux.KindClaude: {Kind: tmux.KindClaude, Windows: []usage.Window{
+			{Label: "week", Percent: 88, ResetsAt: time.Now().Add(2*24*time.Hour + 12*time.Hour)},
+		}},
+	}
+	m.host = host.Stats{
+		CPU:  host.Meter{Percent: 67, Left: "2.69", Known: true},
+		Mem:  host.Meter{Percent: 55, Left: "7.1G", Known: true},
+		Disk: host.Meter{Percent: 8, Left: "406G", Known: true},
+	}
+
+	m.cursor = 0 // the agent
+	onAgent := ansi.Strip(strings.Join(m.hostBlock(28, 10), "\n"))
+	m.cursor = 1 // the shell
+	onShell := ansi.Strip(strings.Join(m.hostBlock(28, 10), "\n"))
+
+	if onAgent != onShell {
+		t.Errorf("the machine is drawn differently depending on the selection:\n%s\n---\n%s",
+			onAgent, onShell)
+	}
+}
+
 func TestUsageRowFitsTheColumn(t *testing.T) {
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	windows := []usage.Window{
@@ -312,7 +345,7 @@ func TestUsageBlockHiddenByConfig(t *testing.T) {
 }
 
 // The sidebar is drawn as fixed-size lines, so a usage block that miscounts
-// its rows would push the legend off or leave a gap.
+// its rows would push a session off the list or leave a gap.
 func TestSidebarStaysExactlyHighWithUsage(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessionsMsg([]tmux.Session{
@@ -768,7 +801,7 @@ func TestHostBlockFitsTheColumn(t *testing.T) {
 }
 
 // The sidebar is drawn as fixed-size lines, so a second block under the limits
-// has to be counted the same way the first one is or the legend falls off.
+// has to be counted the same way the first one is or the column overruns.
 func TestSidebarStaysExactlyHighWithTheHostBlock(t *testing.T) {
 	m := newTestModel()
 	m.cfg.ShowHost = true

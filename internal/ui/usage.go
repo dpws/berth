@@ -79,9 +79,17 @@ func (m *Model) meterLayout(w int, now time.Time) meterLayout {
 		}
 	}
 
-	if l, _, ok := m.selectedLimits(); ok {
-		for _, win := range l.Windows {
-			measure(win.Label, win.Percent, untilReset(win, now))
+	// Every agent berth has read, not only the selected session's. The columns
+	// belong to the sidebar rather than to what the cursor happens to be on,
+	// and measuring only the selection made them move as you walked the list:
+	// a plain shell has no limits of its own, so its rows were laid out as
+	// though the "2d 12h" column did not exist and the machine's meters came
+	// out two cells wider than the same meters a moment earlier.
+	if !m.cfg.HideUsage {
+		for _, l := range m.usage {
+			for _, win := range l.Windows {
+				measure(win.Label, win.Percent, untilReset(win, now))
+			}
 		}
 	}
 	if m.cfg.ShowHost {

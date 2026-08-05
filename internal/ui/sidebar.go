@@ -16,7 +16,7 @@ import (
 const minListRows = 2
 
 // isSidebarRule reports whether a rendered sidebar row is one of the list's own
-// horizontal rules - the lines above the rate limit block and above the legend.
+// horizontal rules - the lines above the rate limit block and above the machine.
 // They are the only rows made of nothing but the rule character, and where one
 // reaches the divider the divider has to be drawn as a join for the two to meet.
 //
@@ -49,13 +49,12 @@ func (m *Model) sidebarLines(w, h int) []string {
 		blank()
 	}
 
-	// Reserve the last two rows for the legend, plus whatever the usage block
-	// needs above it. The block only gets what is left once the list has room
+	// The blocks under the list only get what is left once the list has room
 	// for a session or two: a sidebar showing rate limits and no sessions is
 	// not a sidebar, and a short window used to produce exactly that.
-	usage := m.usageBlock(w, h-len(lines)-2-minListRows)
-	hostRows := m.hostBlock(w, h-len(lines)-2-len(usage)-minListRows)
-	reserved := 2 + len(usage) + len(hostRows)
+	usage := m.usageBlock(w, h-len(lines)-minListRows)
+	hostRows := m.hostBlock(w, h-len(lines)-len(usage)-minListRows)
+	reserved := len(usage) + len(hostRows)
 	listHeight := h - len(lines) - reserved
 	visible := m.visibleSessions()
 
@@ -91,13 +90,6 @@ func (m *Model) sidebarLines(w, h int) []string {
 		lines = append(lines, pad.Render(line))
 		blank()
 	}
-	if h >= 2 {
-		lines = append(lines, pad.Render(dividerStyle.Render(strings.Repeat("─", max(0, w)))))
-		blank()
-		lines = append(lines, pad.Render(" "+m.sidebarLegend()))
-		blank()
-	}
-
 	for len(lines) < h {
 		lines = append(lines, pad.Render(""))
 		blank()
@@ -335,13 +327,6 @@ func (m *Model) statusDot(s tmux.Session) (string, lipgloss.TerminalColor) {
 		return "●", kindColor(kind)
 	}
 	return "○", kindColor(kind)
-}
-
-func (m *Model) sidebarLegend() string {
-	if m.focus == focusTerminal {
-		return footerStyle.Render("typing goes to the session")
-	}
-	return footerStyle.Render("n new  x kill  ? help")
 }
 
 // scrollOffset keeps the given row inside the visible window.

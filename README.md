@@ -188,6 +188,7 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "notify_bell": false,
   "notify_desktop": false,
   "notify_waiting": true,
+  "notify_taskbar": false,
   "notify_idle": false,
   "check_updates": true,
   "hide_window_title": false,
@@ -746,6 +747,20 @@ it is your terminal that raises it — **berth running on a box across an SSH
 connection notifies the machine you are sitting at**. kitty, WezTerm, iTerm2,
 Windows Terminal and foot understand it; terminals that do not ignore it
 silently, which is why both can be on at once.
+
+**`notify_taskbar`** is the third, and the odd one out: it is not an
+announcement but a state. While any session is waiting on you the terminal is
+asked to mark its place in the taskbar, and the mark stays until the last one
+stops waiting — so a moment you were away for is still on screen when you come
+back, which neither a bell nor a toast can manage. It is cleared when berth
+quits, since nothing else on the machine knows to.
+
+That one is ConEmu's `OSC 9;4`, and it is the sequence that actually works
+where the notification protocols do not. **Windows Terminal raises nothing for
+`OSC 9` or `OSC 777`** — both were tried against it and neither produced a
+toast — but it took ConEmu's extensions, so the taskbar colours and stays
+coloured. On a terminal that has never heard of it, the sequence is dropped in
+silence like the rest.
 
 The other two are when. **`notify_waiting`** is a session blocked on a question
 or a permission prompt — the one that is actually costing you time, and on by

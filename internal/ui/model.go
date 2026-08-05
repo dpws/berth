@@ -153,6 +153,11 @@ type Model struct {
 	// what makes a change a change. Nil until the first reading has landed.
 	seen map[string]agent.Status
 
+	// taskbarLit says the terminal has been asked to mark its place in the
+	// taskbar, so the ask is made once when it becomes true and once more when
+	// it stops - rather than on every reading for as long as it holds.
+	taskbarLit bool
+
 	// gitStatus is what the bar knows, by directory. It is kept per directory
 	// rather than only for the selection so that moving back to a session shows
 	// its branch at once instead of blanking until the next read lands.
@@ -471,7 +476,49 @@ func (m *Model) readAgents(sessions []tmux.Session) tea.Cmd {
 	fresh := m.agentWatcher.Refresh(sessions)
 	cmd := m.notifyFor(fresh)
 	m.agents = fresh
-	return cmd
+	return tea.Batch(cmd, m.taskbarCmd())
+}
+
+// The taskbar sequences are ConEmu's, which Windows Terminal took and iTerm2's
+// OSC 9 notification did not survive: a bare "OSC 9 ; text" raises nothing
+// there, while "OSC 9 ; 4" colours the terminal's place in the taskbar and
+// leaves it coloured. That suits this better than a notification would. A
+// session waiting on you is a state rather than an event - it is still waiting
+// a minute later - and a mark that stays lit until you deal with it cannot be
+// missed the way a flash or a toast can.
+//
+// Terminals that do not know the sequence drop it in silence.
+const (
+	taskbarWaiting = "\x1b]9;4;2;100\a" // the "error" state: the loudest of them
+	taskbarClear   = "\x1b]9;4;0;0\a"
+)
+
+// taskbarCmd asks the terminal to mark or unmark its place, when that is not
+// already how it stands. It is worked out from the tally rather than from any
+// one change, so it is right after a session is killed mid-question as well as
+// after one is answered.
+func (m *Model) taskbarCmd() tea.Cmd {
+	want := m.cfg.NotifyTaskbar && agent.Count(m.agents).Waiting > 0
+	if want == m.taskbarLit {
+		return nil
+	}
+	m.taskbarLit = want
+	if want {
+		return tea.Raw(taskbarWaiting)
+	}
+	return tea.Raw(taskbarClear)
+}
+
+// quit leaves, having first put back anything berth changed about the terminal.
+// A mark left lit outlives berth: nothing else on the machine knows to clear
+// it, so the taskbar would stay coloured until the terminal itself closed.
+func (m *Model) quit() tea.Cmd {
+	m.quitting = true
+	if !m.taskbarLit {
+		return tea.Quit
+	}
+	m.taskbarLit = false
+	return tea.Sequence(tea.Raw(taskbarClear), tea.Quit)
 }
 
 // notifyFor works out what to say about the change from the last reading to
@@ -890,8 +937,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.cfg.QuitKey != "" && msg.String() == m.cfg.QuitKey {
 		// Quitting is not destructive - the sessions are tmux's, and they keep
 		// running - so it does not ask first.
-		m.quitting = true
-		return tea.Quit
+		return m.quit()
 	}
 
 	if m.focus == focusTerminal {
@@ -1108,8 +1154,7 @@ func (m *Model) handleSidebarMouse(msg tea.MouseMsg, row int) tea.Cmd {
 func (m *Model) handleSidebarKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "q", "ctrl+c":
-		m.quitting = true
-		return tea.Quit
+		return m.quit()
 
 	case "up", "k", "ctrl+p":
 		return m.moveCursor(-1)

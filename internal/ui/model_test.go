@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1246,5 +1247,96 @@ func TestNotifyForgetsSessionsThatEnd(t *testing.T) {
 	// berth where it stands rather than announcing it.
 	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Waiting}}); got != "" {
 		t.Errorf("a session seen for the first time said %q, want nothing", got)
+	}
+}
+
+// rawOf returns the sequence a command sends the terminal, or "" for none.
+func rawOf(t *testing.T, cmd tea.Cmd) string {
+	t.Helper()
+	if cmd == nil {
+		return ""
+	}
+	msg := cmd()
+	if raw, ok := msg.(tea.RawMsg); ok {
+		return fmt.Sprint(raw.Msg)
+	}
+	// A batch and a sequence are both slices of commands, and a sequence's own
+	// type is not exported - so they are unwrapped by shape rather than by name.
+	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice {
+		out := ""
+		for i := 0; i < v.Len(); i++ {
+			if c, ok := v.Index(i).Interface().(tea.Cmd); ok {
+				out += rawOf(t, c)
+			}
+		}
+		return out
+	}
+	return ""
+}
+
+// The taskbar is a state rather than an announcement: it comes on when the
+// first session starts waiting and goes off when the last one stops, and is
+// asked for once either way rather than on every reading in between.
+func TestTaskbarFollowsWhetherAnythingIsWaiting(t *testing.T) {
+	m := newTestModel()
+	m.cfg.NotifyTaskbar = true
+
+	m.agents = map[string]agent.Info{"api": {Status: agent.Busy}}
+	if got := rawOf(t, m.taskbarCmd()); got != "" {
+		t.Errorf("nothing waiting asked for %q, want no mark", got)
+	}
+
+	m.agents = map[string]agent.Info{"api": {Status: agent.Waiting}}
+	if got := rawOf(t, m.taskbarCmd()); got != taskbarWaiting {
+		t.Errorf("a waiting session asked for %q, want the mark", got)
+	}
+	// A second session waiting changes nothing that is not already true.
+	m.agents = map[string]agent.Info{"api": {Status: agent.Waiting}, "web": {Status: agent.Waiting}}
+	if got := rawOf(t, m.taskbarCmd()); got != "" {
+		t.Errorf("a second waiting session asked for %q, want nothing said twice", got)
+	}
+
+	m.agents = map[string]agent.Info{"api": {Status: agent.Idle}, "web": {Status: agent.Idle}}
+	if got := rawOf(t, m.taskbarCmd()); got != taskbarClear {
+		t.Errorf("nothing waiting any more asked for %q, want the mark cleared", got)
+	}
+}
+
+// The mark outlives berth - nothing else knows to clear it - so leaving has to
+// put it back.
+func TestQuitClearsTheTaskbar(t *testing.T) {
+	m := newTestModel()
+	m.cfg.NotifyTaskbar = true
+	m.agents = map[string]agent.Info{"api": {Status: agent.Waiting}}
+	m.taskbarCmd()
+
+	if got := rawOf(t, m.quit()); !strings.Contains(got, taskbarClear) {
+		t.Errorf("quitting sent %q, want the mark cleared first", got)
+	}
+	if !m.quitting {
+		t.Error("quitting did not set the quitting flag")
+	}
+
+	// With nothing lit there is nothing to put back, and quitting says nothing.
+	m = newTestModel()
+	if got := rawOf(t, m.quit()); got != "" {
+		t.Errorf("quitting with no mark sent %q, want nothing", got)
+	}
+}
+
+func TestTaskbarStaysOffUnlessAskedFor(t *testing.T) {
+	m := newTestModel()
+	m.agents = map[string]agent.Info{"api": {Status: agent.Waiting}}
+	if got := rawOf(t, m.taskbarCmd()); got != "" {
+		t.Errorf("the taskbar was marked without being asked for: %q", got)
+	}
+
+	// Turned off while lit, the mark is put back at the next reading rather
+	// than left behind.
+	m.cfg.NotifyTaskbar = true
+	m.taskbarCmd()
+	m.cfg.NotifyTaskbar = false
+	if got := rawOf(t, m.taskbarCmd()); got != taskbarClear {
+		t.Errorf("turning it off sent %q, want the mark cleared", got)
 	}
 }

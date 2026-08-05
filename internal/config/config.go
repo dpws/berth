@@ -95,6 +95,11 @@ type Config struct {
 	// of the two above has to be on for there to be a way of saying it.
 	NotifyWaiting bool `json:"notify_waiting"`
 	NotifyIdle    bool `json:"notify_idle"`
+	// NotifyTaskbar marks the terminal's place in the taskbar for as long as
+	// any session is waiting on you. It is not an announcement like the two
+	// above but a state, so it stands on its own: it comes on when the first
+	// session starts waiting, and goes off when the last one stops.
+	NotifyTaskbar bool `json:"notify_taskbar"`
 	// CheckUpdates asks GitHub once a day whether there is a newer release and
 	// says so in the header. It is the only request berth makes on its own;
 	// nothing is sent but the ask, and nothing is ever installed without

@@ -499,9 +499,9 @@ func (m *Model) notifyFor(fresh map[string]agent.Info) tea.Cmd {
 			continue
 		}
 		switch {
-		case info.Status.NeedsInput() && m.cfg.NotifiesOn(config.NotifyWaiting):
+		case info.Status.NeedsInput() && m.cfg.NotifiesWaiting():
 			said = append(said, safeTitle(name)+" is waiting on you")
-		case info.Status == agent.Idle && was.Active() && m.cfg.NotifiesOn(config.NotifyIdle):
+		case info.Status == agent.Idle && was.Active() && m.cfg.NotifiesIdle():
 			// Only from work to idle. Anything else - a session berth has just
 			// started following, one coming back from waiting - is not a turn
 			// that finished.
@@ -524,12 +524,12 @@ func (m *Model) notifyFor(fresh map[string]agent.Info) tea.Cmd {
 	sort.Strings(said)
 
 	var b strings.Builder
-	if m.cfg.Rings() {
+	if m.cfg.NotifyBell {
 		// One ring however many sessions moved at once: a terminal cannot ring
 		// twice as loudly, and three bells in a row is an alarm.
 		b.WriteString("\a")
 	}
-	if m.cfg.Raises() {
+	if m.cfg.NotifyDesktop {
 		for _, s := range said {
 			b.WriteString(ansi.Notify(s))
 		}

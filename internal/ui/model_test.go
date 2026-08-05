@@ -1143,8 +1143,8 @@ func notifyStrings(t *testing.T, m *Model, infos map[string]agent.Info) string {
 // would ring for news that is hours old every time berth starts.
 func TestNotifyOnlyOnAChange(t *testing.T) {
 	m := newTestModel()
-	m.cfg.Notify = config.NotifyBoth
-	m.cfg.NotifyOn = []string{config.NotifyWaiting, config.NotifyIdle}
+	m.cfg.NotifyBell, m.cfg.NotifyDesktop = true, true
+	m.cfg.NotifyWaiting, m.cfg.NotifyIdle = true, true
 
 	first := map[string]agent.Info{
 		"api": {Status: agent.Busy},
@@ -1180,8 +1180,8 @@ func TestNotifyOnlyOnAChange(t *testing.T) {
 // started following, or one going back to the prompt after a question, has not.
 func TestFinishedMeansWorkThatStopped(t *testing.T) {
 	m := newTestModel()
-	m.cfg.Notify = config.NotifyBell
-	m.cfg.NotifyOn = []string{config.NotifyIdle}
+	m.cfg.NotifyBell = true
+	m.cfg.NotifyWaiting, m.cfg.NotifyIdle = false, true
 
 	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Waiting}})
 	if got := notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Idle}}); got != "" {
@@ -1200,29 +1200,33 @@ func TestNotifyHonoursHowAndWhen(t *testing.T) {
 	start := map[string]agent.Info{"api": {Status: agent.Busy}}
 
 	cases := []struct {
-		how       string
-		on        []string
-		wantBell  bool
-		wantWords bool
+		bell, desktop bool
+		waiting, idle bool
+		wantBell      bool
+		wantWords     bool
 	}{
-		{config.NotifyOff, []string{config.NotifyWaiting}, false, false},
-		{config.NotifyBell, []string{config.NotifyWaiting}, true, false},
-		{config.NotifyDesktop, []string{config.NotifyWaiting}, false, true},
-		{config.NotifyBoth, []string{config.NotifyWaiting}, true, true},
-		// Asked about, but not about this moment.
-		{config.NotifyBoth, []string{config.NotifyIdle}, false, false},
-		{config.NotifyBoth, nil, false, false},
+		// No way of saying it: the moment is set and nothing happens.
+		{false, false, true, false, false, false},
+		{true, false, true, false, true, false},
+		{false, true, true, false, false, true},
+		{true, true, true, false, true, true},
+		// Both ways of saying it, but not about this moment.
+		{true, true, false, true, false, false},
+		{true, true, false, false, false, false},
 	}
 	for _, c := range cases {
 		m := newTestModel()
-		m.cfg.Notify, m.cfg.NotifyOn = c.how, c.on
+		m.cfg.NotifyBell, m.cfg.NotifyDesktop = c.bell, c.desktop
+		m.cfg.NotifyWaiting, m.cfg.NotifyIdle = c.waiting, c.idle
 		notifyStrings(t, m, start)
 		got := notifyStrings(t, m, waiting)
 		if strings.HasPrefix(got, "\a") != c.wantBell {
-			t.Errorf("notify=%q on=%v: bell in %q, want %v", c.how, c.on, got, c.wantBell)
+			t.Errorf("bell=%v desktop=%v waiting=%v: bell in %q, want %v",
+				c.bell, c.desktop, c.waiting, got, c.wantBell)
 		}
 		if strings.Contains(got, "api is waiting on you") != c.wantWords {
-			t.Errorf("notify=%q on=%v: words in %q, want %v", c.how, c.on, got, c.wantWords)
+			t.Errorf("bell=%v desktop=%v waiting=%v: words in %q, want %v",
+				c.bell, c.desktop, c.waiting, got, c.wantWords)
 		}
 	}
 }
@@ -1231,8 +1235,7 @@ func TestNotifyHonoursHowAndWhen(t *testing.T) {
 // is not compared against a session that no longer exists.
 func TestNotifyForgetsSessionsThatEnd(t *testing.T) {
 	m := newTestModel()
-	m.cfg.Notify = config.NotifyBell
-	m.cfg.NotifyOn = []string{config.NotifyWaiting}
+	m.cfg.NotifyBell, m.cfg.NotifyWaiting = true, true
 
 	notifyStrings(t, m, map[string]agent.Info{"api": {Status: agent.Busy}})
 	notifyStrings(t, m, map[string]agent.Info{}) // api is killed

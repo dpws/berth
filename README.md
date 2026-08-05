@@ -185,8 +185,10 @@ The file itself is optional, at `~/.config/berth/config.json`:
   "hide_task": false,
   "hide_agent_age": false,
   "show_host": false,
-  "notify": "off",
-  "notify_on": ["waiting"],
+  "notify_bell": false,
+  "notify_desktop": false,
+  "notify_waiting": true,
+  "notify_idle": false,
   "check_updates": true,
   "hide_window_title": false,
   "usage_refresh_seconds": 30,
@@ -723,26 +725,34 @@ and a system berth has no reader for shows no block at all.
 ## Being told
 
 Berth watches what every agent is doing anyway, which means it knows the moment
-one of them starts needing you. `"notify"` turns that into something you can
-hear from another window:
+one of them starts needing you. Four switches turn that into something you can
+hear from another window — all of them in `,` as well as the file:
 
 ```json
-{ "notify": "both", "notify_on": ["waiting", "idle"] }
+{
+  "notify_bell": true,
+  "notify_desktop": true,
+  "notify_waiting": true,
+  "notify_idle": false
+}
 ```
 
-`"bell"` rings the terminal — universally supported, and most terminals mark
-the tab as having activity even with the audible bell off, though a beep says
-nothing about *which* session. `"desktop"` asks the terminal to raise a real
-notification, naming the session: `api is waiting on you`. That is OSC 9, so
-like a copy it is your terminal that raises it — **berth running on a box
-across an SSH connection notifies the machine you are sitting at**. kitty,
-WezTerm, iTerm2, Windows Terminal and foot understand it; terminals that do not
-ignore it silently, which is why `"both"` exists. `"off"` is the default.
+The first two are how, and either or both can be on. **`notify_bell`** rings
+the terminal — universally supported, and most terminals mark the tab as having
+activity even with the audible bell off, though a beep says nothing about
+*which* session. **`notify_desktop`** asks the terminal to raise a real
+notification, naming it: `api is waiting on you`. That is OSC 9, so like a copy
+it is your terminal that raises it — **berth running on a box across an SSH
+connection notifies the machine you are sitting at**. kitty, WezTerm, iTerm2,
+Windows Terminal and foot understand it; terminals that do not ignore it
+silently, which is why both can be on at once.
 
-`notify_on` picks the moments. `waiting` is a session blocked on a question or
-a permission prompt — the one that is actually costing you time, and the
-default when you turn any of this on. `idle` is a turn that finished, which
-fires more often and for sessions you were not waiting on.
+The other two are when. **`notify_waiting`** is a session blocked on a question
+or a permission prompt — the one that is actually costing you time, and on by
+default so that switching on a bell rings for something. **`notify_idle`** is a
+turn that finished, which fires more often and for sessions you were not
+waiting on. Neither does anything on its own: with no bell and no desktop
+notification there is no way of saying it, and berth stays quiet.
 
 Only changes are announced. berth's first reading of a session teaches it where
 that session stands; otherwise starting berth beside three idle sessions would

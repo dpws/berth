@@ -115,16 +115,34 @@ func (w *Watcher) Refresh(sessions []tmux.Session) map[string]Info {
 	return out
 }
 
-// AnyWaiting reports whether any session is blocked on you, which is worth
-// surfacing somewhere you can see without looking at berth.
-func AnyWaiting(infos map[string]Info) int {
-	n := 0
+// Counts is how many agents are in each state. It is what a whole list of
+// sessions amounts to, for saying somewhere there is no room to list them.
+type Counts struct {
+	// Waiting is blocked on you, and the one worth surfacing where you can see
+	// it without looking at berth.
+	Waiting int
+	Working int
+	Idle    int
+}
+
+// Total is how many agents were counted at all.
+func (c Counts) Total() int { return c.Waiting + c.Working + c.Idle }
+
+// Count tallies what the agents are doing. A session berth can say nothing
+// about is in none of the totals rather than guessed into one of them.
+func Count(infos map[string]Info) Counts {
+	var c Counts
 	for _, info := range infos {
-		if info.Status.NeedsInput() {
-			n++
+		switch {
+		case info.Status.NeedsInput():
+			c.Waiting++
+		case info.Status.Active():
+			c.Working++
+		case info.Status == Idle:
+			c.Idle++
 		}
 	}
-	return n
+	return c
 }
 
 // cleanTask tidies a prompt for display on one line. Prompts are whatever you

@@ -3,13 +3,14 @@ package ui
 import (
 	"fmt"
 	"slices"
-
-	"github.com/dpws/berth/internal/agent"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/dpws/berth/internal/agent"
+	"github.com/dpws/berth/internal/config"
 	"github.com/dpws/berth/internal/tmux"
 	"github.com/dpws/berth/internal/usage"
 )
@@ -460,7 +461,7 @@ func TestClickingATaskLineSelectsItsSession(t *testing.T) {
 	}
 }
 
-func TestWindowTitleMarksSessionsWaitingForInput(t *testing.T) {
+func TestWindowTitleTalliesWhatTheAgentsAreDoing(t *testing.T) {
 	m := newTestModel()
 	m.Update(sessionsMsg([]tmux.Session{
 		{Name: "api", Kind: tmux.KindClaude, Managed: true},
@@ -468,23 +469,55 @@ func TestWindowTitleMarksSessionsWaitingForInput(t *testing.T) {
 		{Name: "docs", Kind: tmux.KindClaude, Managed: true},
 	}))
 
-	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy}})
+	// Nothing known about any of them yet: the title says only what is
+	// selected, rather than a row of zeroes.
 	if got := m.windowTitle(); got != "api (claude) — berth" {
-		t.Errorf("title = %q, want no marker when nothing waits", got)
+		t.Errorf("title = %q, want no tally when nothing is known", got)
+	}
+
+	withAgents(m, map[string]agent.Info{"api": {Status: agent.Busy}})
+	if got := m.windowTitle(); got != "⠋1 api (claude) — berth" {
+		t.Errorf("title = %q, want the working count", got)
 	}
 
 	// The waiting session is not the selected one, and still marks the tab.
 	withAgents(m, map[string]agent.Info{"web": {Status: agent.Waiting}})
-	if got := m.windowTitle(); got != "● api (claude) — berth" {
-		t.Errorf("title = %q, want a marker", got)
+	if got := m.windowTitle(); got != "?1 api (claude) — berth" {
+		t.Errorf("title = %q, want the waiting count", got)
+	}
+
+	// All three states at once, waiting first: a tab bar truncates from the
+	// end, so the one that needs you has to lead.
+	withAgents(m, map[string]agent.Info{
+		"api":  {Status: agent.Idle},
+		"web":  {Status: agent.Waiting},
+		"docs": {Status: agent.Busy},
+	})
+	if got := m.windowTitle(); got != "?1 ⠋1 ○1 api (claude) — berth" {
+		t.Errorf("title = %q, want all three tallied with waiting first", got)
 	}
 
 	withAgents(m, map[string]agent.Info{
 		"web":  {Status: agent.Waiting},
 		"docs": {Status: agent.Waiting},
 	})
-	if got := m.windowTitle(); got != "●2 api (claude) — berth" {
+	if got := m.windowTitle(); got != "?2 api (claude) — berth" {
 		t.Errorf("title = %q, want a count", got)
+	}
+}
+
+// The tally is what berth knows about the agents, so the setting that stops it
+// watching them has to take the tally with it.
+func TestWindowTitleHasNoTallyWithoutAgentStatus(t *testing.T) {
+	cfg := config.Default()
+	cfg.HideAgentStatus = true
+	m := New(cfg)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.Update(sessionsMsg([]tmux.Session{{Name: "api", Kind: tmux.KindClaude, Managed: true}}))
+
+	m.readAgents(m.sessions)
+	if got := m.windowTitle(); got != "api (claude) — berth" {
+		t.Errorf("title = %q, want no tally when the agents are not watched", got)
 	}
 }
 

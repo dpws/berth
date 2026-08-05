@@ -455,21 +455,50 @@ func (m *Model) syncTitle() {
 // windowTitle names the selected session, so berth is identifiable among a row
 // of terminal tabs rather than showing up as another anonymous shell.
 func (m *Model) windowTitle() string {
-	// A session blocked on you is worth knowing about from the tab bar alone,
-	// so it goes first, where it survives the tab being truncated.
-	prefix := ""
-	switch n := agent.AnyWaiting(m.agents); {
-	case n == 1:
-		prefix = "● "
-	case n > 1:
-		prefix = fmt.Sprintf("●%d ", n)
-	}
+	prefix := m.titleTally()
 
 	s, ok := m.selected()
 	if !ok {
 		return prefix + "berth"
 	}
 	return fmt.Sprintf("%s%s (%s) — berth", prefix, safeTitle(s.Name), sessionKind(s))
+}
+
+// titleTally is the session list as a tab bar can hold it: how many agents are
+// blocked on you, working, and idle. It leads the title, where it survives the
+// tab being truncated - which is the whole point of putting it there, since a
+// tab in the background is exactly where you cannot see the list itself.
+//
+// A state nothing is in is left out rather than shown as a zero: the tally is
+// meant to be read at a glance from the corner of an eye, and "?0 ⠋0 ○3" makes
+// that work. Nothing to count at all leaves the title as it was.
+//
+// The glyphs are the list's own, so the tab and the sidebar say the same thing
+// in the same vocabulary. The spinner stands still here: a title is rewritten
+// with an escape sequence rather than redrawn, and animating one would mean
+// writing it ten times a second for a glyph nobody is looking straight at.
+//
+// hide_agent_status needs no check here. It stops berth watching the agents at
+// all, so the tally has nothing to count and disappears on its own.
+func (m *Model) titleTally() string {
+	c := agent.Count(m.agents)
+	if c.Total() == 0 {
+		return ""
+	}
+	var parts []string
+	for _, p := range []struct {
+		glyph string
+		n     int
+	}{
+		{"?", c.Waiting}, // needs you: first, so truncation takes it last
+		{spinnerFrames[0], c.Working},
+		{"○", c.Idle},
+	} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%s%d", p.glyph, p.n))
+		}
+	}
+	return strings.Join(parts, " ") + " "
 }
 
 // titleNameMax bounds the session name in the title. Terminals truncate long
@@ -2175,13 +2204,20 @@ func (m *Model) helpText() string {
 	if !m.cfg.HideAgentStatus {
 		b.WriteString("\n")
 		glyphs := [][2]string{
-			{"◐", "the agent is working"},
-			{"▲", "the agent is waiting on you"},
+			// The list turns the spinner rather than holding this frame; the
+			// help screen has to name a glyph, so it names the first of them.
+			{spinnerFrames[0], "the agent is working"},
+			{"?", "the agent is waiting on you"},
 			{"○", "idle, or no client attached"},
 		}
 		if !m.cfg.HideAgentAge && !m.cfg.HideTask {
 			glyphs = append(glyphs,
 				[2]string{"12m", "how long it has been doing that"})
+		}
+		if !m.cfg.HideWindowTitle {
+			glyphs = append(glyphs,
+				[2]string{"?2 " + spinnerFrames[0] + "1 ○3",
+					"the same three, tallied on the terminal's tab"})
 		}
 		for _, r := range glyphs {
 			b.WriteString(fmt.Sprintf("%s  %s\n",

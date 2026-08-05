@@ -284,11 +284,11 @@ was last asked to do:
 ```
 ┌────────────────────────────┐
 │ ⠹ api               claude │
-│   rewrite the parser       │
+│   rewrite the parser    2m │
 │ ? web                codex │
-│   approve running: rm -rf… │
+│   approve running: rm … 9m │
 │ ○ docs              claude │
-│   fix the install section  │
+│   fix the install sect… 4h │
 │ ○ dots               shell │
 └────────────────────────────┘
 ```
@@ -305,10 +305,25 @@ is stuck until you answer it. The spinner only ticks while something is
 actually working, so an idle berth is not redrawing for a glyph that is not
 moving.
 
-When anything is waiting, berth also marks the terminal title — `● api (claude)
-— berth`, or `●2 …` for two — so a tab sitting in the background tells you a
-session is blocked without you having to look. The marker leads the title so it
-survives the tab being truncated.
+**The terminal title carries the tally**, so a tab sitting in the background
+says what your agents are up to without you having to look:
+
+```
+?2 ⠋1 ○3 api (claude) — berth
+```
+
+The glyphs are the list's own — `?` blocked on you, dots working, `○` idle —
+so the tab and the sidebar say the same thing in the same vocabulary. A state
+nothing is in is left out rather than shown as a zero, and with nothing to
+count the title is just the session. Waiting leads, since a tab bar truncates
+from the end and that is the number you would mind losing.
+
+The dots stand still up there. A title is rewritten with an escape sequence
+rather than redrawn, so animating it would mean writing the whole title ten
+times a second for a glyph nobody is looking straight at. Set
+`"hide_window_title": true` to keep the tab out of it entirely, or
+`"hide_agent_status": true` to stop berth watching the agents at all, which
+takes the tally with it.
 
 **Where this comes from.** Claude Code writes a status file per process at
 `~/.claude/sessions/<pid>.json`, and that `<pid>` is the same one tmux reports

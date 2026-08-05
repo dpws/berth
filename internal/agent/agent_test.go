@@ -335,18 +335,29 @@ func TestCleanTask(t *testing.T) {
 	}
 }
 
-func TestAnyWaiting(t *testing.T) {
+func TestCount(t *testing.T) {
 	infos := map[string]Info{
 		"a": {Status: Busy},
 		"b": {Status: Waiting},
 		"c": {Status: Idle},
 		"d": {Status: Waiting},
+		// Running a command is work of the agent's own, so it counts as
+		// working rather than as a state of its own.
+		"e": {Status: Shell},
+		// Nothing known: in none of the totals, so the tally never claims more
+		// sessions than berth can actually speak for.
+		"f": {Status: Unknown, Task: "something"},
 	}
-	if got := AnyWaiting(infos); got != 2 {
-		t.Errorf("AnyWaiting = %d, want 2", got)
+	got := Count(infos)
+	want := Counts{Waiting: 2, Working: 2, Idle: 1}
+	if got != want {
+		t.Errorf("Count = %+v, want %+v", got, want)
 	}
-	if got := AnyWaiting(nil); got != 0 {
-		t.Errorf("AnyWaiting(nil) = %d, want 0", got)
+	if got.Total() != 5 {
+		t.Errorf("Total = %d, want 5", got.Total())
+	}
+	if got := Count(nil); got.Total() != 0 {
+		t.Errorf("Count(nil) = %+v, want nothing counted", got)
 	}
 }
 

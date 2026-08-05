@@ -16,6 +16,15 @@ import (
 // right now matter, and those are the most recently written.
 const codexScanFiles = 16
 
+// staleAfter is how long a turn with no end recorded is believed.
+//
+// This is Codex's alone. A rollout is written to all through a turn, so one
+// that has gone quiet really has stopped - where Claude Code writes its status
+// file on a change and never again, and quiet there says nothing at all. Codex
+// records no pid either, so there is nothing to ask instead: the clock is all
+// berth has.
+const staleAfter = 10 * time.Minute
+
 // codexWatcher follows Codex rollouts, which record the start and end of every
 // turn as well as the prompts that drove them.
 type codexWatcher struct {

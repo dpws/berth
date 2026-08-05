@@ -14,17 +14,6 @@ import (
 	"github.com/dpws/berth/internal/tmux"
 )
 
-// staleAfter is how long a status file claiming work is believed. Claude Code
-// removes its file on exit, but a killed process leaves one behind saying
-// "busy" forever.
-//
-// It applies to work only. An agent sitting idle stops writing its file
-// entirely, so the record going quiet is what idle looks like rather than a
-// sign it has died - and how long ago it went quiet is exactly the thing worth
-// reporting. Whether the process is still there answers that better than a
-// clock does; see processAlive.
-const staleAfter = 10 * time.Minute
-
 // claudeStatus is the status file Claude Code keeps at
 // ~/.claude/sessions/<pid>.json for each running process.
 type claudeStatus struct {
@@ -137,7 +126,6 @@ func (w *claudeWatcher) readStatuses() (map[int]claudeStatus, map[string]claudeS
 
 	byPID := make(map[int]claudeStatus, len(entries))
 	byDir := make(map[string]claudeStatus, len(entries))
-	cutoff := time.Now().Add(-staleAfter)
 
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -155,15 +143,12 @@ func (w *claudeWatcher) readStatuses() (map[int]claudeStatus, map[string]claudeS
 			// The file is named for the pid, so recover it if the body lacks one.
 			st.PID, _ = strconv.Atoi(strings.TrimSuffix(e.Name(), ".json"))
 		}
-		// A file whose process has gone is a leftover whatever it says, and one
-		// whose process is still there is the truth however long ago it was
-		// written. The clock is only the fallback, for a status claiming work
-		// from a process berth cannot ask about.
+		// Whether the process is still there is the whole test. Claude Code
+		// writes this file when its status changes and at no other time - no
+		// heartbeat, so "busy" an hour old is an agent an hour into a turn,
+		// not a dead one. A clock cannot tell those apart; a pid can, and a
+		// file whose process has gone is a leftover whatever it says.
 		if !w.alive(st.PID) {
-			continue
-		}
-		updated := msTime(maxInt64(st.StatusAt, st.UpdatedAt))
-		if claudeStatusOf(st.Status).Active() && updated.Before(cutoff) {
 			continue
 		}
 		byPID[st.PID] = st

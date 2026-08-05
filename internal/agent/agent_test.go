@@ -100,16 +100,43 @@ func TestClaudeMatchesByDirectoryWhenPIDDiffers(t *testing.T) {
 }
 
 // A killed agent leaves its file behind saying "busy". Believing that forever
-// would show a dead session as working.
-func TestClaudeIgnoresStaleStatusFiles(t *testing.T) {
+// would show a dead session as working - so the process is what decides,
+// because the clock cannot: see below.
+func TestClaudeIgnoresStatusFilesFromDeadProcesses(t *testing.T) {
 	root := t.TempDir()
-	statusFile(t, root, 4242, "sess-d", "/work/api", "busy", staleAfter+time.Minute)
+	statusFile(t, root, 4242, "sess-d", "/work/api", "busy", time.Hour)
+
+	w := newClaudeWatcher(root)
+	w.alive = func(int) bool { return false }
+	out := map[string]Info{}
+	w.refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+
+	if _, ok := out["api"]; ok {
+		t.Errorf("a file left by a dead process was reported: %+v", out["api"])
+	}
+}
+
+// Claude Code writes this file when its status changes and at no other time.
+// There is no heartbeat, so a "busy" written an hour ago is an agent an hour
+// into a turn - which is exactly the session you most want the list to be
+// right about. Ageing it out showed the busiest sessions as idle.
+func TestClaudeBelievesALongTurn(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 4242, "sess-l", "/work/api", "busy", 72*time.Minute)
 
 	out := map[string]Info{}
 	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
 
-	if _, ok := out["api"]; ok {
-		t.Errorf("a stale status file was reported: %+v", out["api"])
+	got, ok := out["api"]
+	if !ok {
+		t.Fatal("a session an hour into a turn was dropped")
+	}
+	if got.Status != Busy {
+		t.Errorf("Status = %q, want busy", got.Status)
+	}
+	age, known := got.Age(time.Now())
+	if !known || age < 71*time.Minute {
+		t.Errorf("Age = %v (known %v), want the length of the turn so far", age, known)
 	}
 }
 

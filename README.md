@@ -364,12 +364,24 @@ that is idle — rather than the time since the agent last wrote anything down,
 which for a session mid-turn is always "now". Seconds, then minutes, then hours,
 then days, rounded to whichever it is on.
 
-A killed agent leaves its status file behind saying `busy`, so a status
-claiming work that has not been written to for ten minutes is ignored rather
-than shown as working forever. An agent sitting idle is the other way round: it
-stops writing its file altogether, so berth keeps that record for as long as
-the process is there — which is what lets a session say `3h` instead of
-quietly losing its task ten minutes in.
+**Claude Code writes that status file when its status changes and at no other
+time.** There is no heartbeat, so how long ago it was written says nothing
+about whether the session is alive: a `busy` from an hour ago is an agent an
+hour into a turn, and an `idle` from this morning is a session that has been
+sitting at the prompt since. Whether the *process* is still there is the only
+question worth asking, and berth asks it directly — a killed agent leaves its
+file behind saying `busy`, and that file is dropped because its pid has gone,
+not because it is old.
+
+Ageing those records out instead, which berth used to do after ten minutes, got
+both cases wrong: a session an hour into a turn — the one you most want the
+list to be right about — dropped out and showed the same hollow circle as an
+idle one, and a long-idle session quietly lost its task line.
+
+Codex is the other way round and keeps the clock. Its rollout is written to all
+through a turn, so one that has gone quiet really has stopped — and since Codex
+records no pid, there is nothing to ask instead. A turn with no end recorded is
+believed for ten minutes there.
 
 Set `"hide_agent_status": true` to drop the indicator and the title marker,
 `"hide_task": true` to keep the indicator and drop the second line, or

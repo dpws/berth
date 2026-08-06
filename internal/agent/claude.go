@@ -35,6 +35,8 @@ type claudeWatcher struct {
 	// alive reports whether a process is still running. It is a field so tests
 	// can describe processes they have not started.
 	alive func(pid int) bool
+	// now is the clock, so a test can age a reading without waiting for one.
+	now func() time.Time
 }
 
 type transcript struct {
@@ -48,6 +50,7 @@ func newClaudeWatcher(root string) *claudeWatcher {
 		root:  root,
 		tasks: make(map[string]*transcript),
 		alive: processAlive,
+		now:   time.Now,
 	}
 }
 
@@ -64,6 +67,44 @@ func processAlive(pid int) bool {
 	}
 	err = p.Signal(syscall.Signal(0))
 	return err == nil || errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM)
+}
+
+// A claim of work is only as good as the signs of it. Claude Code writes its
+// status file when the status changes and at no other time, so an old file is
+// not by itself evidence of anything - a session an hour into a turn has one.
+// But a file can also simply be abandoned: the process stays up, the session
+// goes on being used, and that one write from hours ago sits there saying
+// "busy" for as long as berth is willing to believe it. Both were seen on the
+// same machine within a day.
+//
+// So the claim is held up by movement rather than by the clock alone. The
+// transcript is the other thing a working session touches - it is appended to
+// as the turn goes, message by message and tool call by tool call - and it is
+// already open, since that is where the task comes from.
+const (
+	// busyHolds is how long a claim of work stands on its own. Longer than any
+	// gap inside a turn, short enough that a forgotten one is not believed all
+	// afternoon.
+	busyHolds = 30 * time.Minute
+	// busyExpires is the end of it. A turn that has run this long without the
+	// status file changing once is not a turn any more, however much the
+	// session has been used since - and being used is exactly what an
+	// abandoned file looks like from the outside.
+	busyExpires = 4 * time.Hour
+)
+
+// believeWork reports whether a session still claiming to be working should be
+// taken at its word. wrote is when its transcript was last appended to, and is
+// zero when berth could not find one.
+func believeWork(status, wrote, now time.Time) bool {
+	if now.Sub(status) <= busyHolds {
+		return true // the agent said so recently enough
+	}
+	if now.Sub(status) > busyExpires {
+		return false // one write, hours ago: not a turn, a leftover
+	}
+	// In between, the turn is believed while it is visibly still going.
+	return !wrote.IsZero() && now.Sub(wrote) <= busyHolds
 }
 
 func (w *claudeWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
@@ -100,9 +141,20 @@ func (w *claudeWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 			Updated: msTime(maxInt64(st.StatusAt, st.UpdatedAt)),
 			Since:   since,
 		}
+
+		var wrote time.Time
 		if path := w.transcriptPath(st.SessionID); path != "" {
 			live[path] = true
 			info.Task = w.task(path)
+			if fi, err := os.Stat(path); err == nil {
+				wrote = fi.ModTime()
+			}
+		}
+		if info.Status.Active() && !believeWork(info.Updated, wrote, w.now()) {
+			// Still there, still says it is working, but nothing about it has
+			// moved in a long time. What it was asked is kept - that much is
+			// still true - and the claim to be working is not.
+			info.Status = Unknown
 		}
 		out[s.Name] = info
 	}

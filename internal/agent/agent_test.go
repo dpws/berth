@@ -38,6 +38,17 @@ func statusFile(t *testing.T, root string, pid int, sessionID, cwd, status strin
 		pid, sessionID, cwd, status, ms, ms))
 }
 
+// touch sets when a transcript was last appended to, which is how berth tells
+// a turn that is still going from a status file nobody is writing any more.
+func touch(t *testing.T, root, sessionID string, ago time.Duration) {
+	t.Helper()
+	path := filepath.Join(root, "projects", "-proj", sessionID+".jsonl")
+	at := time.Now().Add(-ago)
+	if err := os.Chtimes(path, at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func transcriptFile(t *testing.T, root, sessionID string, lines ...string) {
 	t.Helper()
 	body := ""
@@ -117,12 +128,14 @@ func TestClaudeIgnoresStatusFilesFromDeadProcesses(t *testing.T) {
 }
 
 // Claude Code writes this file when its status changes and at no other time.
-// There is no heartbeat, so a "busy" written an hour ago is an agent an hour
-// into a turn - which is exactly the session you most want the list to be
-// right about. Ageing it out showed the busiest sessions as idle.
-func TestClaudeBelievesALongTurn(t *testing.T) {
+// There is no heartbeat, so a "busy" written an hour ago can be an agent an
+// hour into a turn - which is exactly the session you most want the list to be
+// right about. What says it is still going is the transcript, which the turn
+// keeps appending to.
+func TestClaudeBelievesALongTurnThatIsStillGoing(t *testing.T) {
 	root := t.TempDir()
 	statusFile(t, root, 4242, "sess-l", "/work/api", "busy", 72*time.Minute)
+	transcriptFile(t, root, "sess-l", `{"type":"last-prompt","lastPrompt":"port the tests"}`)
 
 	out := map[string]Info{}
 	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
@@ -140,75 +153,78 @@ func TestClaudeBelievesALongTurn(t *testing.T) {
 	}
 }
 
-// An agent sitting idle stops writing its file, so going quiet is what idle
-// looks like. Dropping the record on a clock would lose the session's task and
-// the very age worth reporting, exactly when it has grown interesting.
-func TestClaudeKeepsQuietIdleSessions(t *testing.T) {
+// The same file can also simply be abandoned: the process stays up and the
+// session goes on being used, while that one write from hours ago sits there
+// saying "busy". Believing it showed a session that had been stopped and
+// cleared as working all afternoon.
+func TestClaudeStopsBelievingAnAbandonedClaim(t *testing.T) {
 	root := t.TempDir()
-	statusFile(t, root, 4242, "sess-i", "/work/api", "idle", 3*time.Hour)
+	statusFile(t, root, 4242, "sess-a", "/work/api", "busy", 13*time.Hour)
+	transcriptFile(t, root, "sess-a", `{"type":"last-prompt","lastPrompt":"port the tests"}`)
+	// Used since - which is what an abandoned file looks like from outside,
+	// and must not be enough to resurrect the claim.
+	touch(t, root, "sess-a", 2*time.Minute)
 
 	out := map[string]Info{}
 	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
 
-	got, ok := out["api"]
-	if !ok {
-		t.Fatal("an idle session that had been quiet a while was dropped")
+	got := out["api"]
+	if got.Status == Busy {
+		t.Error("a claim of work from thirteen hours ago was believed")
 	}
-	if got.Status != Idle {
-		t.Errorf("Status = %q, want idle", got.Status)
-	}
-	age, known := got.Age(time.Now())
-	if !known || age < 2*time.Hour {
-		t.Errorf("Age = %v (known %v), want about three hours", age, known)
+	// What it was asked is still true, and is kept.
+	if got.Task != "port the tests" {
+		t.Errorf("Task = %q, want it kept", got.Task)
 	}
 }
 
-// The clock no longer decides whether an idle record is believed, so something
-// has to: a file whose process has gone is a leftover.
-func TestClaudeDropsFilesFromDeadProcesses(t *testing.T) {
+// And in between, a turn is believed only while it is visibly still going.
+func TestClaudeNeedsSignsOfLifeToStayBusy(t *testing.T) {
 	root := t.TempDir()
-	statusFile(t, root, 4242, "sess-j", "/work/api", "idle", time.Minute)
-
-	w := newClaudeWatcher(root)
-	w.alive = func(int) bool { return false }
-	out := map[string]Info{}
-	w.refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
-
-	if _, ok := out["api"]; ok {
-		t.Errorf("a file left by a dead process was reported: %+v", out["api"])
-	}
-}
-
-func TestProcessAlive(t *testing.T) {
-	if !processAlive(os.Getpid()) {
-		t.Error("this test's own process was reported dead")
-	}
-	// Pid 1 is always there and is never ours, so it is the case where the
-	// answer arrives as a permission error rather than a success.
-	if !processAlive(1) {
-		t.Error("pid 1 was reported dead")
-	}
-	if processAlive(0) || processAlive(-1) {
-		t.Error("a pid that cannot name a process was reported alive")
-	}
-}
-
-// The age is how long the agent has been doing this, not how long ago it last
-// wrote anything down: those differ for a session that is still working.
-func TestClaudeAgeIsTimeInTheCurrentStatus(t *testing.T) {
-	root := t.TempDir()
-	now := time.Now()
-	writeFile(t, filepath.Join(root, "sessions", "4242.json"), fmt.Sprintf(
-		`{"pid":4242,"sessionId":"sess-k","cwd":"/w","status":"busy",`+
-			`"updatedAt":%d,"statusUpdatedAt":%d}`,
-		now.UnixMilli(), now.Add(-20*time.Minute).UnixMilli()))
+	statusFile(t, root, 4242, "sess-q", "/work/api", "busy", 90*time.Minute)
+	transcriptFile(t, root, "sess-q", `{"type":"last-prompt","lastPrompt":"port the tests"}`)
+	touch(t, root, "sess-q", 80*time.Minute)
 
 	out := map[string]Info{}
 	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+	if got := out["api"].Status; got == Busy {
+		t.Error("a turn with nothing moving in it for over an hour was believed")
+	}
 
-	age, ok := out["api"].Age(now)
-	if !ok || age < 19*time.Minute || age > 21*time.Minute {
-		t.Errorf("Age = %v (known %v), want about twenty minutes", age, ok)
+	// The same turn, with the transcript still being written.
+	touch(t, root, "sess-q", time.Minute)
+	out = map[string]Info{}
+	testClaudeWatcher(root).refresh([]tmux.Session{{Name: "api", PanePID: 4242}}, out)
+	if got := out["api"].Status; got != Busy {
+		t.Errorf("Status = %q, want busy while the transcript is still moving", got)
+	}
+}
+
+func TestBelieveWork(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) time.Time { return now.Add(-d) }
+	var never time.Time
+
+	cases := []struct {
+		name          string
+		status, wrote time.Duration
+		want          bool
+	}{
+		{"just said so", time.Minute, time.Minute, true},
+		{"said so recently, no transcript found", 20 * time.Minute, 0, true},
+		{"an hour in, still writing", time.Hour, time.Minute, true},
+		{"an hour in, gone quiet", time.Hour, time.Hour, false},
+		{"half a day, used since", 13 * time.Hour, time.Minute, false},
+		{"half a day, quiet too", 13 * time.Hour, 13 * time.Hour, false},
+	}
+	for _, c := range cases {
+		wrote := never
+		if c.wrote > 0 {
+			wrote = ago(c.wrote)
+		}
+		if got := believeWork(ago(c.status), wrote, now); got != c.want {
+			t.Errorf("%s: believeWork = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

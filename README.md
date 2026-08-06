@@ -386,6 +386,18 @@ both cases wrong: a session an hour into a turn — the one you most want the
 list to be right about — dropped out and showed the same hollow circle as an
 idle one, and a long-idle session quietly lost its task line.
 
+**A claim to be working is the one thing held to more than that**, because a
+status file can also simply be abandoned: the process stays up, the session
+goes on being used, and one write from hours ago sits there saying `busy` for
+as long as berth is willing to believe it. Both were seen on the same machine
+within a day. So work is believed while something about it has *moved* — the
+status file, or the transcript the turn appends to as it goes, which berth is
+reading anyway for the task. Half an hour with neither, and the spinner stops;
+four hours on a single write, and it stops whatever else has happened since,
+because being used is exactly what an abandoned file looks like from outside.
+The task line stays either way: what a session was asked is still true. Only
+the claim to be working is dropped.
+
 Codex is the other way round and keeps the clock. Its rollout is written to all
 through a turn, so one that has gone quiet really has stopped — and since Codex
 records no pid, there is nothing to ask instead. A turn with no end recorded is

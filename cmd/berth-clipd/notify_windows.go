@@ -23,9 +23,18 @@ const notifyTimeout = 15 * time.Second
 // attributed to it. That is the whole of the trick.
 const toastAppID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
 
-// toastScript raises the toast. The text comes in through the environment
-// rather than the script, so a session named with a quote cannot end the
-// string it is being interpolated into and start being PowerShell instead.
+// toastScript raises the toast.
+//
+// The text comes in through the environment rather than the script, so a
+// session named with a quote cannot end the string it is being interpolated
+// into and start being PowerShell instead.
+//
+// The two text nodes are reached with Item and filled by assignment. Both
+// matter. GetElementsByTagName hands back a live collection, so indexing it
+// with $lines[0] enumerates it - and appending a child to the first node then
+// modifies the collection the enumerator is standing in, which PowerShell
+// refuses with "Collection was modified". Item goes straight to the node
+// without an enumerator, and setting InnerText adds no node at all.
 const toastScript = `
 $ErrorActionPreference = 'Stop'
 [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -33,8 +42,8 @@ $ErrorActionPreference = 'Stop'
 $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(
     [Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $lines = $template.GetElementsByTagName('text')
-[void]$lines[0].AppendChild($template.CreateTextNode($env:BERTH_NOTIFY_TITLE))
-[void]$lines[1].AppendChild($template.CreateTextNode($env:BERTH_NOTIFY_BODY))
+$lines.Item(0).InnerText = $env:BERTH_NOTIFY_TITLE
+$lines.Item(1).InnerText = $env:BERTH_NOTIFY_BODY
 $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:BERTH_NOTIFY_APPID).Show($toast)
 `

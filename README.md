@@ -344,8 +344,15 @@ moment the last one goes quiet, so an idle berth writes nothing at all. Set
 takes the tally with it.
 
 **Where this comes from.** Claude Code writes a status file per process at
-`~/.claude/sessions/<pid>.json`, and that `<pid>` is the same one tmux reports
-for the pane, so the match is exact rather than guessed. Its own vocabulary is
+`~/.claude/sessions/<pid>.json`, and that `<pid>` is usually the same one tmux
+reports for the pane, so the match is exact rather than guessed. Usually: a
+session can move to Claude Code's background host, and the process in the pane
+is then a client that stops writing its own file while the session it is
+showing carries on being written elsewhere. When a pane's own record has gone
+quiet for half an hour and another in the same directory has not, berth
+believes the one being kept up — otherwise a session reads as whatever it was
+doing when its file was abandoned, which was thirteen hours earlier the day
+this was found. Its own vocabulary is
 `busy`, `waiting`, `idle` and `shell`, which is what the glyphs show; when it
 says what it is waiting for, that replaces the task on the second line. Codex
 records `task_started` and `task_complete` in its session rollout, which gives

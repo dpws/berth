@@ -457,3 +457,52 @@ func TestCodexPrefersTheNewerOfTwoRealRollouts(t *testing.T) {
 		t.Errorf("Task = %q, want the newer prompt", got)
 	}
 }
+
+// A session can move to Claude Code's background host, and then the process in
+// the pane is a client: it stops writing its own status while the session it is
+// showing carries on being written by the host, in the same directory. Reading
+// the pane's own record then means reading a file nobody is keeping up.
+func TestClaudePrefersTheRecordBeingKeptUp(t *testing.T) {
+	root := t.TempDir()
+	// The pane's own process, quiet since yesterday.
+	statusFile(t, root, 4242, "sess-old", "/work/api", "busy", 13*time.Hour)
+	transcriptFile(t, root, "sess-old", `{"type":"last-prompt","lastPrompt":"the old one"}`)
+	touch(t, root, "sess-old", 13*time.Hour)
+	// The host, writing now.
+	statusFile(t, root, 5353, "sess-live", "/work/api", "waiting", time.Minute)
+	transcriptFile(t, root, "sess-live", `{"type":"last-prompt","lastPrompt":"the live one"}`)
+
+	out := map[string]Info{}
+	testClaudeWatcher(root).refresh(
+		[]tmux.Session{{Name: "api", PanePID: 4242, Dir: "/work/api"}}, out)
+
+	got := out["api"]
+	if got.Status != Waiting {
+		t.Errorf("Status = %q, want the live record's - the pane's own is a day old", got.Status)
+	}
+	if got.Task != "the live one" {
+		t.Errorf("Task = %q, want the live record's", got.Task)
+	}
+}
+
+// But only when the pane's own record has actually gone quiet. Two agents in
+// one directory are ordinary, and the one in the pane is the one being asked
+// about - it must not lose its own status to a neighbour that wrote last.
+func TestClaudeKeepsThePanesOwnRecordWhileItIsFresh(t *testing.T) {
+	root := t.TempDir()
+	statusFile(t, root, 4242, "sess-mine", "/work/api", "busy", 2*time.Minute)
+	transcriptFile(t, root, "sess-mine", `{"type":"last-prompt","lastPrompt":"mine"}`)
+	statusFile(t, root, 5353, "sess-other", "/work/api", "idle", 0)
+	transcriptFile(t, root, "sess-other", `{"type":"last-prompt","lastPrompt":"someone else"}`)
+
+	out := map[string]Info{}
+	testClaudeWatcher(root).refresh(
+		[]tmux.Session{{Name: "api", PanePID: 4242, Dir: "/work/api"}}, out)
+
+	if got := out["api"].Task; got != "mine" {
+		t.Errorf("Task = %q, want the pane's own while it is being written", got)
+	}
+	if got := out["api"].Status; got != Busy {
+		t.Errorf("Status = %q, want busy", got)
+	}
+}

@@ -117,12 +117,25 @@ func (w *claudeWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 	}
 
 	live := make(map[string]bool, len(sessions))
+	now := w.now()
 	for _, s := range sessions {
 		st, ok := byPID[s.PanePID]
-		if !ok {
+		byPath, inDir := byDir[filepath.Clean(s.Dir)]
+		switch {
+		case !ok:
 			// Claude started from a shell inside the pane is not the pane's own
 			// process, so fall back to the working directory.
-			st, ok = byDir[filepath.Clean(s.Dir)]
+			st, ok = byPath, inDir
+		case inDir && now.Sub(msTime(maxInt64(st.StatusAt, st.UpdatedAt))) > busyHolds &&
+			msTime(maxInt64(byPath.StatusAt, byPath.UpdatedAt)).
+				After(msTime(maxInt64(st.StatusAt, st.UpdatedAt))):
+			// The pane's own process has gone quiet and something else in the
+			// same directory has not. That is what a session moving to Claude
+			// Code's background host looks like from here: the process in the
+			// pane becomes a client and stops writing, while the session it is
+			// showing carries on being written somewhere else. Believe the
+			// record that is being kept up.
+			st = byPath
 		}
 		if !ok {
 			continue
@@ -150,7 +163,7 @@ func (w *claudeWatcher) refresh(sessions []tmux.Session, out map[string]Info) {
 				wrote = fi.ModTime()
 			}
 		}
-		if info.Status.Active() && !believeWork(info.Updated, wrote, w.now()) {
+		if info.Status.Active() && !believeWork(info.Updated, wrote, now) {
 			// Still there, still says it is working, but nothing about it has
 			// moved in a long time. What it was asked is kept - that much is
 			// still true - and the claim to be working is not.
